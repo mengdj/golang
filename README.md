@@ -8,4 +8,4 @@ golang实现ntp协议客户端
 -
 同步更新 https://gitee.com/mengdj/golang
 
-<img src="https://github.com/mengdj/python/raw/master/paypal.png" width="50%"/>
+boss和worker为最近业余时间正在弄的老板VS员工的监控客户端（兴趣）

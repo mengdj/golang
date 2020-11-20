@@ -1,0 +1,7 @@
+syntax = "proto2";
+package proc;
+
+message Head{
+    required string cmd=1 [default="CMD"];
+    optional uint32 length=2 [default=0];
+}

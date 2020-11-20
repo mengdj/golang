@@ -1,0 +1,66 @@
+syntax = "proto2";
+package proc;
+import public "head.proto";
+
+message Cmd{
+    required Head head=1;
+    required Content content=2;
+}
+
+message Content{
+    //内容类型
+    required ContentType type=1 [default=PING];
+    //内容来源
+    required Source source=2 [default=SERVER];
+    //内容体
+    oneof param{
+         Ping ping=3;
+         Capture capture=4;
+         Chat chat=5;
+    }
+    //附加数据（可选）
+    optional bytes extra=8;
+}
+
+//支持ping 截图
+enum ContentType{
+     //option allow_alias=true;
+     PING=1;
+     CAPTURE=2;
+     CHAT=3;
+     BROADCAST=4;
+}
+
+//消息来源
+enum Source{
+    SERVER=1;
+    CLIENT=2;
+}
+
+message Ping{
+    //主机名
+    optional string name=1;
+    //架构
+    optional string arch=2;
+}
+
+//截图
+message Capture{
+    //数据
+    optional bytes data=1;
+    //数据编号
+    optional uint32 id=2 [default=0];
+    //确认（传入确认号）
+    optional uint32 ack=3 [default=0];
+    //是否有更多数据(分段，大数据)
+    optional bool more=4 [default=false];
+    //数据原始大小（整个包）
+    optional uint32 size=5 [default=0];
+    //是否是压缩数据
+    optional bool compress=6 [default=false];
+}
+
+message Chat{
+    //聊天
+    required string text=1;
+}

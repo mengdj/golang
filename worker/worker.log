@@ -1,3 +1,0 @@
-[2020/11/21 10:49:56 CST] [INFO] (broadcast.(*Broadcast).Start:48) 接收广播:10000
-[2020/11/21 10:50:00 CST] [INFO] (client.(*Client).Start:71) 服务器连接成功:192.168.0.105:10001
-[2020/11/21 10:50:59 CST] [CRIT] (main.main.func3:70) 客户端关闭

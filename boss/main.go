@@ -45,7 +45,6 @@ func main() {
 		if err := ser.Start(ctx, BROADCAST_LISTEN_PORT); nil != err {
 			logger.Error("server: %s\n", err)
 		}
-		ser.Stop()
 	})
 	<-signChan
 	logger.Info("关闭中...")

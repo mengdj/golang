@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	broadcast v0.0.0
+	tool v0.0.0
 	github.com/ThreeDotsLabs/watermill v1.1.1 // indirect
 	github.com/alecthomas/log4go v0.0.0-20180109082532-d146e6b86faa
 	github.com/golang/protobuf v1.4.3 // indirect
@@ -19,6 +20,7 @@ require (
 )
 
 replace (
+	tool v0.0.0 => ./tool
 	codec v0.0.0 => ./codec
 	broadcast v0.0.0 => ./broadcast
 	proc v0.0.0 => ./proc

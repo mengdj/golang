@@ -27,3 +27,5 @@ func (this *ExtGoChanel) Continue(topic string) {
 func (this *ExtGoChanel) IsPause(topic string) bool {
 	return this.pauseTopics.Contains(topic)
 }
+
+

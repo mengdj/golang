@@ -6,11 +6,11 @@
     <level>DEBUG</level>
     <property name="format">[%D %T] [%L] (%S) %M</property>
   </filter>
-  <filter enabled="false">
+  <filter enabled="true">
     <tag>file</tag>
     <type>file</type>
-    <level>FINEST</level>
-    <property name="filename">log/worker.log</property>
+    <level>ERROR</level>
+    <property name="filename">log/boss.log</property>
     <!--
        %T - Time (15:04:05 MST)
        %t - Time (15:04)

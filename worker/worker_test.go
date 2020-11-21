@@ -8,5 +8,7 @@ import (
 
 func TestCapture(t *testing.T) {
 	shot := screenshot.NewScreenshotDefault()
-	log.Println(shot.Capture())
+	if nil == shot.Capture() {
+		log.Println(shot.Resize(1920, 0, screenshot.Lanczos3,90))
+	}
 }

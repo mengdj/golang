@@ -14,6 +14,7 @@ import (
 	"github.com/gogf/gf/container/gtype"
 	"github.com/gogf/gf/os/gmutex"
 	"github.com/golang/protobuf/proto"
+	"github.com/golang/snappy"
 	"github.com/robfig/cron"
 	"io"
 	"net"
@@ -127,7 +128,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				}()
 				//处理接收到的队列消息
 				go func() {
-					for msg:=range readMessage{
+					for msg := range readMessage {
 						if connectFailureStatus.Val() {
 							break
 						}
@@ -205,18 +206,22 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 	if lock.TryLock() {
 		var (
 			contentType proc.ContentType = proc.ContentType_CAPTURE
-			compress    bool             = false
+			file        *os.File
+			err         error
 		)
 		this.captId += 1
 		this.captId %= 65536
 		//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
 		if nil == this.capt.Capture() {
-			if file, err := os.Open(this.capt.GetPath()); nil == err {
+			if err = this.capt.Resize(1920, 0, screenshot.Lanczos3,90); nil != err {
+				this.logger.Warn(err)
+			}
+			if file, err = os.Open(this.capt.GetPath()); nil == err {
 				defer func() {
 					file.Close()
 				}()
 				//内部函数实现发送截图数据到队列
-				pageSend := func(d []byte, seq uint32, more bool) {
+				pageSend := func(d []byte, seq uint32, more, compress bool) {
 					if ret, err := this.cmdPool.Get(); nil == err {
 						if ins, ok := ret.(*proc.Cmd); ok {
 							contentCapture := &proc.Content_Capture{}
@@ -226,6 +231,7 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 							contentCapture.Capture.Id = &this.captId
 							contentCapture.Capture.Data = d
 							contentCapture.Capture.Seq = &seq
+							contentCapture.Capture.Compress = &compress
 							ins.Content.Source = &source
 							ins.Content.Type = &contentType
 							ins.Content.Param = contentCapture
@@ -244,16 +250,23 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 				//
 				raw := make([]byte, CAPTURE_PAGE_SIZE)
 				buffReader := bufio.NewReader(file)
-				var seq uint32 = 1
+				var seq uint32 = 0
+				pageSend([]byte{}, seq, false, false)
+				//空包0+内容+最后一个包（空包）
+				seq++
 				for {
 					read, err := buffReader.Read(raw)
 					if err == io.EOF || read < 0 {
 						break
 					}
-					pageSend(raw[:read], seq, true)
+					if tmp := snappy.Encode(nil, raw); len(tmp) > 0 {
+						pageSend(tmp, seq, true, true)
+					} else {
+						pageSend(raw[:read], seq, true, false)
+					}
 					seq++
 				}
-				pageSend([]byte{}, seq, false)
+				pageSend([]byte{}, seq, false, false)
 			}
 		}
 		lock.Unlock()

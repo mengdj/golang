@@ -38,7 +38,7 @@ func main() {
 		ret.Body = new(proc.Body)
 		return ret
 	}}
-	pubSub := ext.NewExtGoChannel(gochannel.Config{Persistent: true}, watermill.NewStdLogger(false, false))
+	pubSub := ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: true}, watermill.NewStdLogger(false, false))
 	messages, err := pubSub.Subscribe(context.Background(), "START_CONNECT_SERVER")
 	if nil != err {
 		panic(err)

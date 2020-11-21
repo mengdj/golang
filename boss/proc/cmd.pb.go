@@ -405,7 +405,7 @@ type Capture struct {
 	More *bool `protobuf:"varint,5,opt,name=more,def=0" json:"more,omitempty"`
 	//数据原始大小（整个包）
 	Size *uint32 `protobuf:"varint,6,opt,name=size,def=0" json:"size,omitempty"`
-	//是否是压缩数据
+	//是否是压缩数据 snappy
 	Compress *bool `protobuf:"varint,7,opt,name=compress,def=0" json:"compress,omitempty"`
 }
 

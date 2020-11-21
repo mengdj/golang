@@ -58,7 +58,7 @@ message Capture{
     optional bool more=5 [default=false];
     //数据原始大小（整个包）
     optional uint32 size=6 [default=0];
-    //是否是压缩数据
+    //是否是压缩数据 snappy
     optional bool compress=7 [default=false];
 }
 

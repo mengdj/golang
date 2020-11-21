@@ -16,7 +16,6 @@ import (
 	"os"
 	"proc"
 	"strings"
-	"syscall"
 	"time"
 	"tool"
 )
@@ -62,7 +61,6 @@ type App struct {
 	connects ConnectContainer
 	//定时任务
 	cronTask *cron.Cron
-	mask     int
 }
 
 func NewApp(logger *log4go.Logger) *App {
@@ -77,7 +75,6 @@ func (this *App) Start(ctx context.Context, listenPort uint32) error {
 func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)",
 		srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
-	this.mask = syscall.Umask(0)
 	//协议池
 	this.cmdPool = gpool.New(0, func() (interface{}, error) {
 		ret := new(proc.Cmd)
@@ -122,7 +119,6 @@ func (this *App) OnShutdown(svr gnet.Server) {
 	this.workerPool.Release()
 	this.chanBytePool.Close()
 	this.cmdPool.Close()
-	syscall.Umask(this.mask)
 }
 
 func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {

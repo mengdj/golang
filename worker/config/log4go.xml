@@ -10,7 +10,7 @@
     <tag>file</tag>
     <type>file</type>
     <level>ERROR</level>
-    <property name="filename">log/boss.log</property>
+    <property name="filename">log/worker.log</property>
     <!--
        %T - Time (15:04:05 MST)
        %t - Time (15:04)

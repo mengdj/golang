@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -56,12 +57,13 @@ func NewScreenshot(path string) *Screenshot {
 		}()
 		if info, err := tmp.GetInfoStat(); nil == err {
 			//读取配置文件获取对应的命令
-			os := info.OS
+			ost := info.OS
 			cfg := viper.New()
 			cfg.SetConfigType("yaml")
 			cfg.ReadConfig(f)
-			tmp.cmd = cfg.Get(fmt.Sprintf("%s.cmd", os)).(string)
-			tmp.file = cfg.Get(fmt.Sprintf("%s.file", os)).(string)
+			tmp.cmd = cfg.Get(fmt.Sprintf("%s.cmd", ost)).(string)
+			tmp.file = fmt.Sprintf("%s/capture.jpg", os.TempDir())
+			log.Println(tmp.file)
 			if "" != tmp.cmd && "" != tmp.file {
 				tmp.cmd = strings.ReplaceAll(tmp.cmd, "%FILE%", tmp.file)
 				return tmp

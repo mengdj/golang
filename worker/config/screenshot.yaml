@@ -1,6 +1,4 @@
 linux:
     cmd: "gnome-screenshot --file=%FILE%"
-    file: "/home/mengdj/tmp/capture.jpg"
 windows:
-    cmd: ""
-    file: ""
+    cmd: "nircmd savescreenshot %FILE%"

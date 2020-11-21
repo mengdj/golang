@@ -63,7 +63,6 @@ func NewScreenshot(path string) *Screenshot {
 			cfg.ReadConfig(f)
 			tmp.cmd = cfg.Get(fmt.Sprintf("%s.cmd", ost)).(string)
 			tmp.file = fmt.Sprintf("%s/capture.jpg", os.TempDir())
-			log.Println(tmp.file)
 			if "" != tmp.cmd && "" != tmp.file {
 				tmp.cmd = strings.ReplaceAll(tmp.cmd, "%FILE%", tmp.file)
 				return tmp

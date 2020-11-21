@@ -23,6 +23,7 @@ func main() {
 		err       error
 	)
 	logger := log4go.NewDefaultLogger(log4go.DEBUG)
+	logger.LoadConfiguration("config/log4go.xml")
 	ctx, cancel_ctx := context.WithCancel(context.Background())
 	ants_pool, err = ants.NewPool(5, ants.WithPreAlloc(false))
 	if nil != err {

@@ -48,16 +48,18 @@ message Ping{
 message Capture{
     //数据
     optional bytes data=1;
-    //数据编号
+    //当前数据包编号
     optional uint32 id=2 [default=0];
-    //确认（传入确认号）
-    optional uint32 ack=3 [default=0];
+    //数据包切分序列号
+    optional uint32 seq=3 [default=0];
+    //确认（传入确认号，确认号为服务器反馈收到的序号 id:seq）
+    optional uint32 ack=4 [default=0];
     //是否有更多数据(分段，大数据)
-    optional bool more=4 [default=false];
+    optional bool more=5 [default=false];
     //数据原始大小（整个包）
-    optional uint32 size=5 [default=0];
+    optional uint32 size=6 [default=0];
     //是否是压缩数据
-    optional bool compress=6 [default=false];
+    optional bool compress=7 [default=false];
 }
 
 message Chat{

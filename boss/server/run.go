@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/alecthomas/log4go"
+	"github.com/gogf/gf/container/gpool"
 	"github.com/golang/protobuf/proto"
 	"github.com/panjf2000/gnet"
 	"github.com/panjf2000/gnet/pool/goroutine"
 	"github.com/robfig/cron"
 	"proc"
 	"codec"
-	"sync"
 	"time"
 )
 
@@ -34,7 +34,7 @@ type App struct {
 	async      bool
 	codec      gnet.ICodec
 	workerPool *goroutine.Pool
-	cmdPool    *sync.Pool
+	cmdPool    *gpool.Pool
 	logger     *log4go.Logger
 	connects   ConnectContainer
 	cronTask   *cron.Cron
@@ -52,14 +52,15 @@ func (this *App) Start(ctx context.Context, listenPort uint32) error {
 func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.logger.Info("服务器启动成功 %s (multi-cores: %t, loops: %d)",
 		srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
-	this.cmdPool = &sync.Pool{New: func() interface{} {
-		ret := &proc.Cmd{}
-		ret.Reset()
-		return ret
-	}}
+	this.cmdPool = gpool.New(0, func() (interface{}, error) {
+		ret := new(proc.Cmd)
+		ret.Head = new(proc.Head)
+		ret.Content = new(proc.Content)
+		return ret, nil
+	}, nil)
 	this.workerPool = goroutine.Default()
-	//每10秒输出一次已连接的客户端数并检测存活的连接
-	this.cronTask.AddFunc("*/10 * * * *", func() {
+	//每15秒输出一次已连接的客户端数并检测存活的连接
+	this.cronTask.AddFunc("*/15 * * * *", func() {
 		now := time.Now().Unix()
 		active := 0
 		for i, v := range this.connects {
@@ -72,7 +73,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 			}
 			active++
 		}
-		this.logger.Info("在线客户数:%d", active)
+		this.logger.Info("在线客户:%d", active)
 	})
 	this.cronTask.Start()
 	return
@@ -87,30 +88,28 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 		if len(frame) > 0 {
 			remoteAddr := c.RemoteAddr().String()
 			//read
-			cmd := this.cmdPool.Get()
-			if nil != cmd {
-				msg := cmd.(*proc.Cmd)
-				if err := proto.Unmarshal(frame, msg); nil == err {
-					switch *msg.Content.Type {
-					case proc.ContentType_PING:
-						this.logger.Info(msg)
-						//处理PING请求
-						if s, ok := this.connects[remoteAddr]; ok {
-							s.prevPing = time.Now().Unix()
-							s.name = *msg.Content.GetPing().Name
-							this.connects[remoteAddr] = s
+			if cmd,err := this.cmdPool.Get();nil==err{
+				if nil != cmd {
+					msg := cmd.(*proc.Cmd)
+					if err := proto.Unmarshal(frame, msg); nil == err {
+						switch *msg.Content.Type {
+						case proc.ContentType_PING:
+							//处理PING请求(用ping请求来辅助检测客户端是否还存活)
+							if s, ok := this.connects[remoteAddr]; ok {
+								s.prevPing = time.Now().Unix()
+								s.name = *msg.Content.GetPing().Name
+								this.connects[remoteAddr] = s
+							}
+							break
+						case proc.ContentType_CAPTURE:
+							this.logger.Info(*(msg.Content.Param.(*proc.Content_Capture).Capture.Id),*(msg.Content.Param.(*proc.Content_Capture).Capture.Seq))
+							break
 						}
-						//reply
-						break
-					case proc.ContentType_CAPTURE:
-						this.logger.Info(*(msg.Content.Param.(*proc.Content_Capture).Capture.More))
-						//处理截图数据
-						break
+					} else {
+						this.logger.Info("数据包异常:%s",err.Error())
 					}
-				} else {
-					this.logger.Info("数据包异常:%s",err.Error())
+					this.cmdPool.Put(cmd)
 				}
-				this.cmdPool.Put(cmd)
 			}
 		}
 	}

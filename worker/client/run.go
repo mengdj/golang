@@ -11,6 +11,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/alecthomas/log4go"
 	"github.com/gogf/gf/container/gpool"
+	"github.com/gogf/gf/container/gtype"
 	"github.com/gogf/gf/os/gmutex"
 	"github.com/golang/protobuf/proto"
 	"github.com/robfig/cron"
@@ -59,7 +60,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 	cron_task := cron.New()
 	//处理连接失败
 	connectFailure = make(chan None)
-	connectFailureStatus := false
+	connectFailureStatus := gtype.NewBool(false)
 	defer func() {
 		close(connectFailure)
 	}()
@@ -126,17 +127,12 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				}()
 				//处理接收到的队列消息
 				go func() {
-					for {
-						if connectFailureStatus {
+					for msg:=range readMessage{
+						if connectFailureStatus.Val() {
 							break
 						}
-						select {
-						case msg := <-readMessage:
-							if len(msg.Payload) > 0 {
-								this.logger.Debug(msg.Payload)
-							}
-							msg.Ack()
-						}
+						//code here
+						msg.Ack()
 					}
 				}()
 				cron_task.Start()
@@ -144,12 +140,11 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				case <-ctx.Done():
 					this.logger.Info("客户端终止")
 				case <-connectFailure:
-					//写入终止读的操作
-					connectFailureStatus = true
+					connectFailureStatus.Set(true)
 				}
 				//取消队列数据(PING)
 				cron_task.Stop()
-				return errors.New("连接服务器失败，已关闭")
+				return errors.New("客户端关闭")
 			} else {
 				this.logger.Fine(writeStatus)
 			}
@@ -221,7 +216,7 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 					file.Close()
 				}()
 				//内部函数实现发送截图数据到队列
-				pageSend := func(d []byte, more bool) {
+				pageSend := func(d []byte, seq uint32, more bool) {
 					if ret, err := this.cmdPool.Get(); nil == err {
 						if ins, ok := ret.(*proc.Cmd); ok {
 							contentCapture := &proc.Content_Capture{}
@@ -230,6 +225,7 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 							contentCapture.Capture.More = &more
 							contentCapture.Capture.Id = &this.captId
 							contentCapture.Capture.Data = d
+							contentCapture.Capture.Seq = &seq
 							ins.Content.Source = &source
 							ins.Content.Type = &contentType
 							ins.Content.Param = contentCapture
@@ -248,14 +244,16 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 				//
 				raw := make([]byte, CAPTURE_PAGE_SIZE)
 				buffReader := bufio.NewReader(file)
+				var seq uint32 = 1
 				for {
 					read, err := buffReader.Read(raw)
 					if err == io.EOF || read < 0 {
 						break
 					}
-					pageSend(raw[:read], true)
+					pageSend(raw[:read], seq, true)
+					seq++
 				}
-				pageSend([]byte{}, false)
+				pageSend([]byte{}, seq, false)
 			}
 		}
 		lock.Unlock()

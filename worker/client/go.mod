@@ -20,4 +20,5 @@ replace (
 	ext v0.0.0 => ../ext
 	proc v0.0.0 => ../proc
 	screenshot v0.0.0 => ../screenshot
+	tool v0.0.0 => ../tool
 )

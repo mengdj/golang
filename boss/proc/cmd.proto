@@ -40,8 +40,8 @@ enum Source{
 message Ping{
     //主机名
     optional string name=1;
-    //架构
-    optional string arch=2;
+    //触发ping的时间，此值可用于后期判断传输质量
+    optional int64 time=2;
 }
 
 //截图

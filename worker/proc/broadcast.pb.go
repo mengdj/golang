@@ -87,7 +87,7 @@ type Body struct {
 
 	//服务器主机
 	Server *string `protobuf:"bytes,2,req,name=server" json:"server,omitempty"`
-	//端口号2字节 65536
+	//端口号4字节 65536
 	Port *uint32 `protobuf:"varint,3,req,name=port" json:"port,omitempty"`
 }
 

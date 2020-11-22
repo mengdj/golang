@@ -10,6 +10,6 @@ message Broadcast{
 message Body{
     //服务器主机
     required string server=2;
-    //端口号2字节 65536
+    //端口号4字节 65536
     required uint32 port=3;
 }

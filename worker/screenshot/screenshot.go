@@ -4,17 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/nfnt/resize"
-	"github.com/shirou/gopsutil/host"
-	"github.com/spf13/viper"
 	"image"
 	"image/jpeg"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"github.com/nfnt/resize"
+	"github.com/shirou/gopsutil/host"
+	"github.com/spf13/viper"
 )
 
 type InterpolationFunction int

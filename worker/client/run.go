@@ -21,7 +21,9 @@ import (
 	"os"
 	"proc"
 	"screenshot"
+	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -57,6 +59,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 		tcpCon         *net.TCPConn
 		tcpErr         error
 		connectFailure chan None
+		wgroup         sync.WaitGroup
 	)
 	cron_task := cron.New()
 	//处理连接失败
@@ -86,6 +89,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				})
 				//读取接收到的包并发布到消息队列（读取）
 				go func() {
+					wgroup.Add(1)
 					for {
 						if rd, e := this.packCodec.Read(); nil == e {
 							if len(rd) > 0 {
@@ -106,9 +110,11 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 					}
 					//失败信息
 					connectFailure <- None{}
+					wgroup.Done()
 				}()
 				//处理消息队列（写入）并发送至服务器
 				go func() {
+					wgroup.Add(1)
 					for msg := range writeMessage {
 						if e := this.packCodec.Write(msg.Payload); nil == e {
 							msg.Ack()
@@ -125,16 +131,26 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 					}
 					//失败信息
 					connectFailure <- None{}
+					wgroup.Done()
 				}()
 				//处理接收到的队列消息
 				go func() {
-					for msg := range readMessage {
+					wgroup.Add(1)
+					for {
 						if connectFailureStatus.Val() {
 							break
 						}
-						//code here
-						msg.Ack()
+						select {
+						case <-connectFailure:
+							goto EXIT_THIS
+						case msg := <-readMessage:
+							if nil!=msg{
+								msg.Ack()
+							}
+						}
 					}
+					EXIT_THIS:
+					wgroup.Done()
 				}()
 				cron_task.Start()
 				select {
@@ -143,7 +159,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				case <-connectFailure:
 					connectFailureStatus.Set(true)
 				}
-				//取消队列数据(PING)
+				wgroup.Wait()
 				cron_task.Stop()
 				return errors.New("客户端关闭")
 			} else {
@@ -172,6 +188,7 @@ func (this *Client) ping(lock *gmutex.Mutex) {
 		var (
 			hostName    string           = ""
 			contentType proc.ContentType = proc.ContentType_PING
+			unixTime    int64            = time.Now().Unix()
 		)
 		contentPing := &proc.Content_Ping{}
 		contentPing.Ping = &proc.Ping{}
@@ -180,6 +197,7 @@ func (this *Client) ping(lock *gmutex.Mutex) {
 			hostName = h
 		}
 		contentPing.Ping.Name = &hostName
+		contentPing.Ping.Time = &unixTime
 		//每5秒发送一个心跳包
 		if ret, err := this.cmdPool.Get(); nil == err {
 			if ins, ok := ret.(*proc.Cmd); ok {
@@ -201,6 +219,14 @@ func (this *Client) ping(lock *gmutex.Mutex) {
 	}
 }
 
+/** 发送本机基本信息 */
+func (this *Client) info(lock *gmutex.Mutex) {
+	if lock.TryLock() {
+		//缓存信息
+		lock.Unlock()
+	}
+}
+
 /** 捕捉屏幕截图（可能比较耗时因此加入锁） */
 func (this *Client) capture(lock *gmutex.Mutex) {
 	if lock.TryLock() {
@@ -213,7 +239,7 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 		this.captId %= 65536
 		//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
 		if nil == this.capt.Capture() {
-			if err = this.capt.Resize(1920, 0, screenshot.Lanczos3,90); nil != err {
+			if err = this.capt.Resize(1920, 0, screenshot.Lanczos3, 90); nil != err {
 				this.logger.Warn(err)
 			}
 			if file, err = os.Open(this.capt.GetPath()); nil == err {

@@ -64,7 +64,7 @@ type App struct {
 }
 
 func NewApp(logger *log4go.Logger) *App {
-	return &App{logger: logger, multicore: false, async: true, connects: make(map[string]*connectItem), cronTask: cron.New()}
+	return &App{logger: logger, multicore: true, async: true, connects: make(map[string]*connectItem), cronTask: cron.New()}
 }
 
 func (this *App) Start(ctx context.Context, listenPort uint32) error {
@@ -112,6 +112,10 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	})
 	this.cronTask.Start()
 	return
+}
+
+func (this *App) Tick() (delay time.Duration, action gnet.Action) {
+	return time.Second * 15, gnet.None
 }
 
 func (this *App) OnShutdown(svr gnet.Server) {
@@ -223,15 +227,8 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 						}
 					}
 				}
-			CLOSE_CON:
-				tool.Try(func() {
-					if nil != this.connects[remoteAddr].close {
-						close(this.connects[remoteAddr].close)
-					}
-				}, func(i interface{}) {
-					this.logger.Warn(i)
-				})
-				//this.chanBytePool.Put(this.connects[remoteAddr].cap.recv)
+				CLOSE_CON:
+					//
 			}
 		}
 	})
@@ -243,6 +240,11 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	if s, ok := this.connects[removeAddr]; ok {
 		if nil != s.conn {
 			s.close <- None{}
+			tool.Try(func() {
+				close(s.close)
+			}, func(i interface{}) {
+				this.logger.Info(i)
+			})
 			this.chanBytePool.Put(s.cap.recv)
 			delete(this.connects, removeAddr)
 		}

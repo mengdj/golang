@@ -14,6 +14,7 @@ import (
 	"github.com/nfnt/resize"
 	"github.com/shirou/gopsutil/host"
 	"github.com/spf13/viper"
+	"tool"
 )
 
 type InterpolationFunction int
@@ -38,6 +39,7 @@ const (
 type Screenshot struct {
 	cmd  string
 	file string
+	local *tool.Local
 }
 
 //默认读取当前目录下的config/screenshot.yaml文件
@@ -51,10 +53,11 @@ func NewScreenshotDefault() *Screenshot {
 func NewScreenshot(path string) *Screenshot {
 	if f, err := os.Open(path); nil == err {
 		tmp := &Screenshot{}
+		tmp.local=tool.NewLocal()
 		defer func() {
 			f.Close()
 		}()
-		if info, err := tmp.GetInfoStat(); nil == err {
+		if info, err := tmp.local.InfoStat(); nil == err {
 			//读取配置文件获取对应的命令
 			ost := info.OS
 			cfg := viper.New()

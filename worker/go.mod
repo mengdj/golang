@@ -6,10 +6,8 @@ require (
 	broadcast v0.0.0
 	client v0.0.0
 	ext v0.0.0
-	github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d // indirect
 	github.com/ThreeDotsLabs/watermill v1.1.1
 	github.com/alecthomas/log4go v0.0.0-20180109082532-d146e6b86faa
-	github.com/go-ole/go-ole v1.2.4 // indirect
 	github.com/golang/protobuf v1.4.3
 	proc v0.0.0
 	screenshot v0.0.0

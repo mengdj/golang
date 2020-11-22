@@ -47,9 +47,6 @@ type ConnectContainer = map[string]*connectItem
 
 type App struct {
 	*gnet.EventServer
-	addr      string
-	multicore bool
-	async     bool
 	//协程池
 	workerPool *goroutine.Pool
 	//协议处理
@@ -64,12 +61,12 @@ type App struct {
 }
 
 func NewApp(logger *log4go.Logger) *App {
-	return &App{logger: logger, multicore: true, async: true, connects: make(map[string]*connectItem), cronTask: cron.New()}
+	return &App{logger: logger, connects: make(map[string]*connectItem), cronTask: cron.New()}
 }
 
+/** 使用自定义解码器解码 */
 func (this *App) Start(ctx context.Context, listenPort uint32) error {
-	//使用自定义解码器解码
-	return gnet.Serve(this, fmt.Sprintf("%s://0.0.0.0:%d", TCP, listenPort), gnet.WithMulticore(this.multicore), gnet.WithTCPKeepAlive(time.Minute*5), gnet.WithCodec(codec.NewCodec()))
+	return gnet.Serve(this, fmt.Sprintf("%s://0.0.0.0:%d", TCP, listenPort), gnet.WithLogger(Logger{this.logger}), gnet.WithTicker(true), gnet.WithReusePort(true), gnet.WithMulticore(true), gnet.WithTCPKeepAlive(time.Minute*1), gnet.WithCodec(codec.NewCodec()))
 }
 
 func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
@@ -94,28 +91,31 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.workerPool = goroutine.Default()
 	//每15秒输出一次已连接的客户端数并检测存活的连接
 	this.cronTask.AddFunc("*/15 * * * *", func() {
-		now := time.Now().Unix()
-		active := 0
-		for i, v := range this.connects {
-			if (now - v.ping) > 15 {
-				if err := v.conn.Close(); nil != err {
-					this.logger.Warn(err)
-				}
-				v.close <- None{}
-				this.chanBytePool.Put(v.cap.recv)
-				delete(this.connects, i)
-				continue
-			}
-			active++
-		}
-		this.logger.Info("在线客户:%d", active)
+		this.logger.Info("在线客户:%d", len(this.connects))
 	})
 	this.cronTask.Start()
 	return
 }
 
 func (this *App) Tick() (delay time.Duration, action gnet.Action) {
-	return time.Second * 15, gnet.None
+	now := time.Now().Unix()
+	active := 0
+	for i, v := range this.connects {
+		if (now - v.ping) > 10 {
+			if err := v.conn.Close(); nil != err {
+				this.logger.Warn(err)
+			}
+			v.close <- None{}
+			this.chanBytePool.Put(v.cap.recv)
+			delete(this.connects, i)
+			continue
+		}
+		active++
+	}
+	if active == 0 {
+		return time.Second * 10, gnet.None
+	}
+	return time.Second * 5, gnet.None
 }
 
 func (this *App) OnShutdown(svr gnet.Server) {
@@ -227,8 +227,8 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 						}
 					}
 				}
-				CLOSE_CON:
-					//
+			CLOSE_CON:
+				//
 			}
 		}
 	})

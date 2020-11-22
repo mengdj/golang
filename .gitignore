@@ -1,0 +1,5 @@
+boss/boss
+boss/log/*.log
+boss/data/*
+worker/worker
+worker/log/*.log

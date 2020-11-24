@@ -9,11 +9,13 @@ import (
 	"os/signal"
 	"server"
 	"syscall"
+	"web/model"
 )
 
 const (
 	BROADCAST_PORT        = 10000
 	BROADCAST_LISTEN_PORT = 10001
+	WEB_LISTEN_PORT       = 10002
 )
 
 func main() {
@@ -35,14 +37,14 @@ func main() {
 	}()
 	signal.Notify(signChan, syscall.SIGINT, syscall.SIGTERM)
 	bc := broadcast.NewBroadcast(&logger)
-	ser := server.NewApp(&logger)
+	app := server.NewApp(&logger, model.Port{BROADCAST_LISTEN_PORT,WEB_LISTEN_PORT})
 	ants_pool.Submit(func() {
 		if err := bc.Start(ctx, BROADCAST_LISTEN_PORT, BROADCAST_PORT); err != nil {
 			logger.Error("broadcast: %s\n", err)
 		}
 	})
 	ants_pool.Submit(func() {
-		if err := ser.Start(ctx, BROADCAST_LISTEN_PORT); nil != err {
+		if err := app.Start(ctx); nil != err {
 			logger.Error("server: %s\n", err)
 		}
 	})

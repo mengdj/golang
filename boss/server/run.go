@@ -4,7 +4,12 @@ import (
 	"bufio"
 	"codec"
 	"context"
+	"encoding/json"
+	"ext"
 	"fmt"
+	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alecthomas/log4go"
 	"github.com/gogf/gf/container/gpool"
 	"github.com/gogf/gf/container/gtype"
@@ -12,12 +17,13 @@ import (
 	"github.com/golang/snappy"
 	"github.com/panjf2000/gnet"
 	"github.com/panjf2000/gnet/pool/goroutine"
-	"github.com/robfig/cron"
 	"os"
 	"proc"
 	"strings"
 	"time"
 	"tool"
+	www "web"
+	"web/model"
 )
 
 const (
@@ -47,6 +53,7 @@ type ConnectContainer = map[string]*connectItem
 
 type App struct {
 	*gnet.EventServer
+	port model.Port
 	//协程池
 	workerPool *goroutine.Pool
 	//协议处理
@@ -56,22 +63,26 @@ type App struct {
 	logger       *log4go.Logger
 	//在线连接
 	connects ConnectContainer
-	//定时任务
-	cronTask *cron.Cron
+	//web服务器
+	web  *www.Web
+	mill *ext.ExtGoChanel
 }
 
-func NewApp(logger *log4go.Logger) *App {
-	return &App{logger: logger, connects: make(map[string]*connectItem), cronTask: cron.New()}
+func NewApp(logger *log4go.Logger, p model.Port) *App {
+	return &App{logger: logger, connects: make(map[string]*connectItem), port: p}
 }
 
 /** 使用自定义解码器解码 */
-func (this *App) Start(ctx context.Context, listenPort uint32) error {
-	return gnet.Serve(this, fmt.Sprintf("%s://0.0.0.0:%d", TCP, listenPort), gnet.WithLogger(Logger{this.logger}), gnet.WithTicker(true), gnet.WithReusePort(true), gnet.WithMulticore(true), gnet.WithTCPKeepAlive(time.Minute*1), gnet.WithCodec(codec.NewCodec()))
+func (this *App) Start(ctx context.Context) error {
+	return gnet.Serve(this, fmt.Sprintf("%s://0.0.0.0:%d", TCP, this.port.Socket), gnet.WithLogger(Logger{this.logger}), gnet.WithTicker(true), gnet.WithReusePort(true), gnet.WithMulticore(true), gnet.WithTCPKeepAlive(time.Minute*1), gnet.WithCodec(codec.NewCodec()))
 }
 
 func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
-	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)",
-		srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
+	//协程池
+	this.workerPool = goroutine.Default()
+	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)", srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
+	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
+	this.web = www.NewWeb(this.logger, this.mill, this.workerPool)
 	//协议池
 	this.cmdPool = gpool.New(0, func() (interface{}, error) {
 		ret := new(proc.Cmd)
@@ -87,13 +98,30 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 			close(c)
 		}
 	})
-	//协程池
-	this.workerPool = goroutine.Default()
-	//每15秒输出一次已连接的客户端数并检测存活的连接
-	this.cronTask.AddFunc("*/15 * * * *", func() {
-		this.logger.Info("在线客户:%d", len(this.connects))
+	//启动web服务器
+	this.workerPool.Submit(func() {
+		if err := this.web.Run(fmt.Sprintf(":%d", this.port.Web)); nil != err {
+			this.logger.Critical(err)
+		}
 	})
-	this.cronTask.Start()
+	this.workerPool.Submit(func() {
+		//订阅查询所有客户端消息，给其他查询
+		if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS); nil == err {
+			for {
+				select {
+				case <-messages:
+					//查询所在的客户信息(传输到消息队列即可)
+					workers := []model.Worker{}
+					for s, c := range this.connects {
+						workers = append(workers, model.Worker{Addr: s, Name: c.name, Ping: c.ping})
+					}
+					if res, err := json.Marshal(workers); nil == err {
+						this.mill.Publish(tool.QUERY_WORKERS_RESULT, message.NewMessage(watermill.NewUUID(), res))
+					}
+				}
+			}
+		}
+	})
 	return
 }
 
@@ -112,6 +140,7 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 		}
 		active++
 	}
+	//触发消息服务
 	if active == 0 {
 		return time.Second * 10, gnet.None
 	}
@@ -119,7 +148,6 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 }
 
 func (this *App) OnShutdown(svr gnet.Server) {
-	this.cronTask.Stop()
 	this.workerPool.Release()
 	this.chanBytePool.Close()
 	this.cmdPool.Close()
@@ -128,7 +156,7 @@ func (this *App) OnShutdown(svr gnet.Server) {
 func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
 	if action != gnet.Close && action != gnet.Shutdown {
 		if len(frame) > 0 {
-			remoteAddr := c.RemoteAddr().String()
+			remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
 			//read
 			if cmd, err := this.cmdPool.Get(); nil == err {
 				if nil != cmd {
@@ -171,12 +199,19 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 }
 
 func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
-	remoteAddr := c.RemoteAddr().String()
-	this.connects[remoteAddr] = &connectItem{conn: c, close: make(chan None), ping: time.Now().Unix()}
+	remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
+	nowUnix := time.Now().Unix()
+	this.connects[remoteAddr] = &connectItem{conn: c, close: make(chan None), ping: nowUnix}
 	this.connects[remoteAddr].cap = capture{nil, nil, gtype.NewBool(true)}
 	if i, e := this.chanBytePool.Get(); nil == e {
 		if c, ok := i.(chan []byte); ok {
 			this.connects[remoteAddr].cap.recv = c
+		}
+	}
+	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
+	if !this.mill.IsPause(tool.WORKER_ONLINE) {
+		if d, e := json.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: nowUnix}); nil == e {
+			this.mill.Publish(tool.WORKER_ONLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 		}
 	}
 	//接收截图
@@ -236,8 +271,14 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 }
 
 func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
-	removeAddr := c.RemoteAddr().String()
+	removeAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
 	if s, ok := this.connects[removeAddr]; ok {
+		//发布客户端离线消息
+		if !this.mill.IsPause(tool.WORKER_OFFLINE) {
+			if d, e := json.Marshal(model.Worker{Addr: removeAddr, Name: s.name, Ping: s.ping}); nil == e {
+				this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+			}
+		}
 		if nil != s.conn {
 			s.close <- None{}
 			tool.Try(func() {

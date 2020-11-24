@@ -8,6 +8,7 @@ import (
 	cron "github.com/robfig/cron/v3"
 	"net"
 	"proc"
+	"tool"
 )
 
 const (
@@ -24,25 +25,6 @@ type Broadcast struct {
 
 func NewBroadcast(logger *log4go.Logger) *Broadcast {
 	return &Broadcast{crontab: cron.New(cron.WithSeconds()), running: false, logger: logger}
-}
-
-func (this *Broadcast) localAddress() (string, error) {
-	var (
-		addrs []net.Addr
-		err   error
-		ret   string = ""
-	)
-	addrs, err = net.InterfaceAddrs()
-	if nil == err {
-		for _, val := range addrs {
-			if ipNet, ok := val.(*net.IPNet); ok {
-				if nil != ipNet.IP.To4() {
-					ret = ipNet.IP.String()
-				}
-			}
-		}
-	}
-	return ret, err
 }
 
 func (this *Broadcast) Start(ctx context.Context, listenPort, broadcastPort uint32) error {
@@ -63,7 +45,7 @@ func (this *Broadcast) Start(ctx context.Context, listenPort, broadcastPort uint
 				pack.Body = &proc.Body{}
 				pack.Head.Cmd = &cmd
 				//获取本机ip地址
-				if ip, err = this.localAddress(); nil == err {
+				if ip, err = tool.LocalAddress();nil == err {
 					pack.Body.Server = &ip
 					pack.Body.Port = &listenPort
 					bodyLength = uint32(len([]byte(pack.Body.String())))

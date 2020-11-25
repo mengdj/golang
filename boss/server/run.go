@@ -11,13 +11,18 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alecthomas/log4go"
+	"github.com/gogf/gf/container/gmap"
 	"github.com/gogf/gf/container/gpool"
 	"github.com/gogf/gf/container/gtype"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/nfnt/resize"
 	"github.com/panjf2000/gnet"
 	"github.com/panjf2000/gnet/pool/goroutine"
+	"image"
+	"image/jpeg"
 	"os"
+	"path/filepath"
 	"proc"
 	"strings"
 	"time"
@@ -31,11 +36,13 @@ const (
 )
 
 type None = struct{}
+
 type capture struct {
 	recv   chan []byte
 	file   *os.File
 	status *gtype.Bool
 }
+
 type connectItem = struct {
 	//连接
 	conn gnet.Conn
@@ -49,7 +56,7 @@ type connectItem = struct {
 	ping int64
 }
 
-type ConnectContainer = map[string]*connectItem
+type ConnectContainer = gmap.StrAnyMap
 
 type App struct {
 	*gnet.EventServer
@@ -62,14 +69,15 @@ type App struct {
 	chanBytePool *gpool.Pool
 	logger       *log4go.Logger
 	//在线连接
-	connects ConnectContainer
+	connects *ConnectContainer
 	//web服务器
-	web  *www.Web
+	web *www.Web
+	//消息处理
 	mill *ext.ExtGoChanel
 }
 
 func NewApp(logger *log4go.Logger, p model.Port) *App {
-	return &App{logger: logger, connects: make(map[string]*connectItem), port: p}
+	return &App{logger: logger, connects: gmap.NewStrAnyMap(true), port: p}
 }
 
 /** 使用自定义解码器解码 */
@@ -98,28 +106,68 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 			close(c)
 		}
 	})
-	//启动web服务器
+	//启动WEB服务器
 	this.workerPool.Submit(func() {
 		if err := this.web.Run(fmt.Sprintf(":%d", this.port.Web)); nil != err {
 			this.logger.Critical(err)
 		}
 	})
+	//订阅查询所有客户端消息，给其他查询
 	this.workerPool.Submit(func() {
-		//订阅查询所有客户端消息，给其他查询
 		if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS); nil == err {
 			for {
 				select {
 				case <-messages:
-					//查询所在的客户信息(传输到消息队列即可)
+					//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
 					workers := []model.Worker{}
-					for s, c := range this.connects {
-						workers = append(workers, model.Worker{Addr: s, Name: c.name, Ping: c.ping})
-					}
+					this.connects.Iterator(func(k string, v interface{}) bool {
+						tar := v.(*connectItem)
+						workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping})
+						return true
+					})
 					if res, err := json.Marshal(workers); nil == err {
 						this.mill.Publish(tool.QUERY_WORKERS_RESULT, message.NewMessage(watermill.NewUUID(), res))
 					}
 				}
 			}
+		} else {
+			this.logger.Error(err)
+		}
+	})
+	//处理接收到的截图并生成缩略图(后台任务)
+	this.workerPool.Submit(func() {
+		if tasks, err := this.mill.Subscribe(context.Background(), tool.PROCESS_FOR_SLOW); nil == err {
+			for {
+				select {
+				case task := <-tasks:
+					if "build_capture" == task.Metadata.Get("name") {
+						//生成缩略图(方便给其他接口处理)
+						spath := string(task.Payload)
+						if sf, errs := os.Open(spath); nil == errs {
+							if img, _, erri := image.Decode(sf); nil == erri {
+								if nimg := resize.Resize(400, 0, img, resize.InterpolationFunction(resize.Lanczos3)); nil != nimg {
+									if tf, errt := os.OpenFile(fmt.Sprintf("%s/capture_thumb%s", filepath.Dir(spath), filepath.Ext(spath)), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == errt {
+										if erre := jpeg.Encode(tf, nimg, &jpeg.Options{Quality: 90}); nil != erre {
+											this.logger.Warn(erre)
+										}
+										tf.Close()
+									} else {
+										this.logger.Warn(errt)
+									}
+								}
+							} else {
+								this.logger.Warn(erri)
+							}
+							sf.Close()
+						} else {
+							this.logger.Warn(errs)
+						}
+					}
+					task.Ack()
+				}
+			}
+		} else {
+			this.logger.Error(err)
 		}
 	})
 	return
@@ -128,23 +176,31 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 	now := time.Now().Unix()
 	active := 0
-	for i, v := range this.connects {
-		if (now - v.ping) > 10 {
-			if err := v.conn.Close(); nil != err {
+	this.connects.Iterator(func(k string, v interface{}) bool {
+		tar := v.(*connectItem)
+		if (now - tar.ping) > 10 {
+			//触发下线通知
+			if !this.mill.IsPause(tool.WORKER_OFFLINE) {
+				if d, e := json.Marshal(model.Worker{Addr: strings.Split(tar.conn.RemoteAddr().String(), ":")[0], Name: tar.name, Ping: tar.ping}); nil == e {
+					this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+				}
+			}
+			if err := tar.conn.Close(); nil != err {
 				this.logger.Warn(err)
 			}
-			v.close <- None{}
-			this.chanBytePool.Put(v.cap.recv)
-			delete(this.connects, i)
-			continue
+			tar.close <- None{}
+			this.chanBytePool.Put(tar.cap.recv)
+			this.connects.Remove(k)
+		} else {
+			active++
 		}
-		active++
-	}
-	//触发消息服务
+		return true
+	})
 	if active == 0 {
-		return time.Second * 10, gnet.None
+		//适当延迟数据
+		return time.Second * 3, gnet.None
 	}
-	return time.Second * 5, gnet.None
+	return time.Second * 1, gnet.None
 }
 
 func (this *App) OnShutdown(svr gnet.Server) {
@@ -165,24 +221,25 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 						switch *msg.Content.Type {
 						case proc.ContentType_PING:
 							//处理PING请求(用ping请求来辅助检测客户端是否还存活)
-							if s, ok := this.connects[remoteAddr]; ok {
-								s.ping = time.Now().Unix()
-								s.name = *msg.Content.GetPing().Name
-								this.connects[remoteAddr] = s
+							if this.connects.Contains(remoteAddr) {
+								tar := this.connects.Get(remoteAddr).(*connectItem)
+								tar.ping = time.Now().Unix()
+								tar.name = *msg.Content.GetPing().Name
 							}
 							break
 						case proc.ContentType_CAPTURE:
 							//发送数据给接收者接收文件数据(状态异常就丢弃数据了，防止都塞)
-							if this.connects[remoteAddr].cap.status.Val() {
+							if this.connects.Contains(remoteAddr) {
+								tar := this.connects.Get(remoteAddr).(*connectItem)
 								if *(msg.Content.GetCapture().Compress) {
 									if tmp, derr := snappy.Decode(nil, msg.Content.GetCapture().GetData()); nil == derr {
-										this.connects[remoteAddr].cap.recv <- tmp
+										tar.cap.recv <- tmp
 									} else {
 										this.logger.Error(derr)
 										//恢复一个异常解码数据
 									}
 								} else {
-									this.connects[remoteAddr].cap.recv <- msg.Content.GetCapture().GetData()
+									tar.cap.recv <- msg.Content.GetCapture().GetData()
 								}
 							}
 							break
@@ -201,11 +258,11 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
 	nowUnix := time.Now().Unix()
-	this.connects[remoteAddr] = &connectItem{conn: c, close: make(chan None), ping: nowUnix}
-	this.connects[remoteAddr].cap = capture{nil, nil, gtype.NewBool(true)}
+	conitem := &connectItem{conn: c, close: make(chan None), ping: nowUnix}
+	conitem.cap = capture{nil, nil, gtype.NewBool(true)}
 	if i, e := this.chanBytePool.Get(); nil == e {
 		if c, ok := i.(chan []byte); ok {
-			this.connects[remoteAddr].cap.recv = c
+			conitem.cap.recv = c
 		}
 	}
 	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
@@ -214,56 +271,64 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 			this.mill.Publish(tool.WORKER_ONLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 		}
 	}
+	this.connects.SetIfNotExist(remoteAddr, conitem)
+
 	//接收截图
 	this.workerPool.Submit(func() {
-		//切割ip数据
-		if dir, e := os.Getwd(); nil == e {
-			dir = fmt.Sprintf("%s/data/%s", dir, strings.Split(remoteAddr, ":")[0])
-			if e = os.MkdirAll(dir, os.ModePerm); e != nil {
-				this.logger.Error(e)
-				this.connects[remoteAddr].cap.status.Set(false)
-			} else {
-				//目标文件路径
-				save := fmt.Sprintf("%s/capture.jpg", dir)
-				//缓冲区写入文件
-				var writer *bufio.Writer = nil
-				for {
-					if c, ok := this.connects[remoteAddr]; ok {
+		//匿名函数内部使用的只是指针的拷贝，可能对象已被释放(因此需要拷贝)
+		item := conitem
+		if nil != item {
+			if dir, e := os.Getwd(); nil == e {
+				dir = fmt.Sprintf("%s/data/%s", dir, strings.Split(remoteAddr, ":")[0])
+				if e = os.MkdirAll(dir, os.ModePerm); e != nil {
+					this.logger.Error(e)
+					conitem.cap.status.Set(false)
+				} else {
+					//目标文件路径
+					save := fmt.Sprintf("%s/capture.jpg", dir)
+					//缓冲区写入文件
+					var writer *bufio.Writer = nil
+					for {
 						select {
-						case <-c.close:
+						case <-item.close:
 							goto CLOSE_CON
-						case data := <-c.cap.recv:
+						case data := <-item.cap.recv:
 							//code here
-							if c.cap.status.Val() {
+							if item.cap.status.Val() {
 								if 0 == len(data) {
-									if nil == c.cap.file {
+									if nil == item.cap.file {
 										//start
-										if c.cap.file, e = os.OpenFile(save, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == e {
+										if item.cap.file, e = os.OpenFile(save, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == e {
 											if nil == writer {
-												writer = bufio.NewWriter(c.cap.file)
+												//文件缓冲设置为10KB
+												writer = bufio.NewWriterSize(item.cap.file, 1024*10)
 											}
-											writer.Reset(c.cap.file)
+											writer.Reset(item.cap.file)
 										} else {
 											this.logger.Error(e)
-											c.cap.status.Set(false)
+											conitem.cap.status.Set(false)
 										}
 									} else {
-										//stop
+										//停止(保存目标文件)
 										writer.Flush()
-										c.cap.file.Close()
-										c.cap.file = nil
+										item.cap.file.Close()
+										item.cap.file = nil
+										if nm := message.NewMessage(watermill.NewUUID(), []byte(save)); nil != nm {
+											nm.Metadata.Set("name", "build_capture")
+											this.mill.Publish(tool.PROCESS_FOR_SLOW, nm)
+										}
 									}
 								} else {
-									if nil != c.cap.file && nil != writer {
+									if nil != item.cap.file && nil != writer {
 										writer.Write(data)
 									}
 								}
 							}
 						}
 					}
+				CLOSE_CON:
+					//
 				}
-			CLOSE_CON:
-				//
 			}
 		}
 	})
@@ -272,22 +337,25 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 
 func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	removeAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
-	if s, ok := this.connects[removeAddr]; ok {
-		//发布客户端离线消息
-		if !this.mill.IsPause(tool.WORKER_OFFLINE) {
-			if d, e := json.Marshal(model.Worker{Addr: removeAddr, Name: s.name, Ping: s.ping}); nil == e {
-				this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+	if this.connects.Contains(removeAddr) {
+		tar := this.connects.Get(removeAddr).(*connectItem)
+		if nil != tar {
+			//发布客户端离线消息
+			if !this.mill.IsPause(tool.WORKER_OFFLINE) {
+				if d, e := json.Marshal(model.Worker{Addr: removeAddr, Name: tar.name, Ping: tar.ping}); nil == e {
+					this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+				}
 			}
-		}
-		if nil != s.conn {
-			s.close <- None{}
-			tool.Try(func() {
-				close(s.close)
-			}, func(i interface{}) {
-				this.logger.Info(i)
-			})
-			this.chanBytePool.Put(s.cap.recv)
-			delete(this.connects, removeAddr)
+			if nil != tar.conn {
+				tar.close <- None{}
+				tool.Try(func() {
+					close(tar.close)
+				}, func(i interface{}) {
+					this.logger.Info(i)
+				})
+				this.chanBytePool.Put(tar.cap.recv)
+				this.connects.Remove(removeAddr)
+			}
 		}
 	}
 	return

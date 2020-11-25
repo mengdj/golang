@@ -51,7 +51,7 @@ func (this *Broadcast) Start(ctx context.Context, listenPort, broadcastPort uint
 					bodyLength = uint32(len([]byte(pack.Body.String())))
 					pack.Head.Length = &bodyLength
 					if writeData, err = proto.Marshal(&pack); nil == err {
-						this.crontab.AddFunc("*/5 * * * * *", func() {
+						this.crontab.AddFunc("*/10 * * * * *", func() {
 							_, err = conn.Write(writeData)
 							if nil != err {
 								this.logger.Warn(err)

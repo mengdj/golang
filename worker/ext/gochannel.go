@@ -1,7 +1,10 @@
 package ext
 
 import (
+	"errors"
+	"fmt"
 	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/gogf/gf/container/gset"
 )
@@ -16,11 +19,17 @@ func NewExtGoChannel(config gochannel.Config, logger watermill.LoggerAdapter) *E
 	return t
 }
 
+func (this *ExtGoChanel) Publish(topic string, messages ...*message.Message) error {
+	if !this.IsPause(topic){
+		return this.GoChannel.Publish(topic,messages...)
+	}
+	return errors.New(fmt.Sprintf("%s has pause.",topic))
+}
+
 func (this *ExtGoChanel) Pause(topics ...string) {
 	for _,t:=range topics{
 		this.pauseTopics.AddIfNotExist(t)
 	}
-
 }
 
 func (this *ExtGoChanel) Continue(topics ...string) {

@@ -80,12 +80,8 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				//创建锁保证TCP流顺序发送
 				syncLock := gmutex.New()
 				//每5秒发送心跳协议
-				cron_task.AddFunc("*/5 * * * *", func() {
+				cron_task.AddFunc("*/3 * * * *", func() {
 					this.ping(syncLock)
-				})
-				//每1分钟发送截图数据
-				cron_task.AddFunc("0 */1 * * *", func() {
-					this.capture(syncLock)
 				})
 				//读取接收到的包并发布到消息队列（读取）
 				go func() {
@@ -152,6 +148,8 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 					EXIT_THIS:
 					wgroup.Done()
 				}()
+				//上线发送一次截图数据
+				this.capture(syncLock)
 				cron_task.Start()
 				select {
 				case <-ctx.Done():

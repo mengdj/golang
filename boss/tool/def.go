@@ -1,0 +1,21 @@
+package tool
+
+import "time"
+
+const (
+	//jwt
+	TOKENEXPIREDURATION = time.Hour * 2
+	TOKENSECRECT        = "生活不仅有远方的诗，还有眼前的苟且"
+	//web
+	DEFAULT_ADMIN string = "admin"
+	RANDOM_CHARS         = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefhijklmnopqrstuvwxyz1234567890"
+	//msg and websocket
+	WORKER_ONLINE         = "WORKER_ONLINE"
+	WORKER_ONLINE_RESULT  = "WORKER_ONLINE_RESULT"
+	WORKER_OFFLINE        = "WORKER_OFFLINE"
+	WORKER_OFFLINE_RESULT = "WORKER_OFFLINE_RESULT"
+	QUERY_WORKERS         = "QUERY_WORKERS"
+	QUERY_WORKERS_RESULT  = "QUERY_WORKERS_RESULT"
+	//process后台部分慢查询
+	PROCESS_FOR_SLOW = "PROCESS_FOR_SLOW"
+)

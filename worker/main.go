@@ -38,13 +38,13 @@ func main() {
 		ret.Body = new(proc.Body)
 		return ret
 	}}
+	logger := log4go.NewDefaultLogger(log4go.DEBUG)
+	logger.LoadConfiguration("config/log4go.xml")
 	pubSub := ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: true}, watermill.NewStdLogger(false, false))
 	messages, err := pubSub.Subscribe(context.Background(), "START_CONNECT_SERVER")
 	if nil != err {
 		panic(err)
 	}
-	logger := log4go.NewDefaultLogger(log4go.DEBUG)
-	logger.LoadConfiguration("config/log4go.xml")
 	broadcastLis = broadcast.NewBroadcast(&logger)
 	cli = client.NewClient(&logger, pubSub)
 	sign = make(chan os.Signal)

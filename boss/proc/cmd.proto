@@ -17,18 +17,19 @@ message Content{
          Ping ping=3;
          Capture capture=4;
          Chat chat=5;
+         Rpc rpc=6;
     }
     //附加数据（可选）
-    optional bytes extra=8;
+    optional bytes extra=7;
 }
 
-//支持ping 截图
 enum ContentType{
      //option allow_alias=true;
      PING=1;
      CAPTURE=2;
      CHAT=3;
      BROADCAST=4;
+     RPC=5;
 }
 
 //消息来源
@@ -37,6 +38,7 @@ enum Source{
     CLIENT=2;
 }
 
+//
 message Ping{
     //主机名
     optional string name=1;
@@ -65,4 +67,9 @@ message Capture{
 message Chat{
     //聊天
     required string text=1;
+}
+
+message Rpc{
+    required string server=1;
+    required uint32 port=2;
 }

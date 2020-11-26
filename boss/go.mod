@@ -19,7 +19,7 @@ require (
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 	ext v0.0.0
 	server v0.0.0
-	web v0.0.0
+	admin v0.0.0
 
 )
 
@@ -30,5 +30,5 @@ replace (
 	proc v0.0.0 => ./proc
 	server v0.0.0 => ./server
 	tool v0.0.0 => ./tool
-	web v0.0.0 => ./web
+	admin v0.0.0 => ./admin
 )

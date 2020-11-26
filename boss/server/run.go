@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 	"tool"
-	www "web"
-	"web/model"
+	"admin"
+	"admin/model"
 )
 
 const (
@@ -71,7 +71,7 @@ type App struct {
 	//在线连接
 	connects *ConnectContainer
 	//web服务器
-	web *www.Web
+	web *admin.Web
 	//消息处理
 	mill *ext.ExtGoChanel
 }
@@ -90,7 +90,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.workerPool = goroutine.Default()
 	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)", srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
 	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
-	this.web = www.NewWeb(this.logger, this.mill, this.workerPool)
+	this.web = admin.NewWeb(this.logger, this.mill, this.workerPool)
 	//协议池
 	this.cmdPool = gpool.New(0, func() (interface{}, error) {
 		ret := new(proc.Cmd)

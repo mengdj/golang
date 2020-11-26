@@ -15,7 +15,7 @@ require (
 	github.com/robfig/cron v1.2.0
 	proc v0.0.0
 	tool v0.0.0
-	web v0.0.0
+	admin v0.0.0
 )
 
 replace (
@@ -23,5 +23,5 @@ replace (
 	ext v0.0.0 => ../ext
 	proc v0.0.0 => ../proc
 	tool v0.0.0 => ../tool
-	web v0.0.0 => ../web
+	admin v0.0.0 => ../admin
 )

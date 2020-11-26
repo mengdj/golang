@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"server"
 	"syscall"
-	"web/model"
+	"admin/model"
 )
 
 const (

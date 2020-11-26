@@ -1,7 +1,7 @@
 package tool
 
 import (
-	"math/rand"
+	"gitlab.com/NebulousLabs/fastrand"
 	"net"
 )
 
@@ -38,7 +38,7 @@ func LocalAddress() (string, error) {
 func RandomStr(chars string, size int) string {
 	b := make([]byte, size)
 	for i := 0; i < size; i++ {
-		b[i] = chars[rand.Intn(len(chars))]
+		b[i] = chars[fastrand.Intn(len(chars))]
 	}
 	return string(b)
 }

@@ -106,10 +106,10 @@ func (this *Web) Run(addr ...string) (err error) {
 
 func (this *Web) init(lody *melody.Melody) (err error) {
 	this.Delims("{{", "}}")
-	this.Static("/static", "./web/view/static")
+	this.Static("/static", "./admin/view/static")
 	this.Static("/data", "./data")
-	this.StaticFile("/favicon.ico", "./web/view/favicon.ico")
-	this.LoadHTMLFiles("./web/view/index.html", "./web/view/login.html")
+	this.StaticFile("/favicon.ico", "./admin/view/favicon.ico")
+	this.LoadHTMLFiles("./admin/view/index.html", "./admin/view/login.html")
 	//处理websocket()
 	lody.HandleConnect(func(session *melody.Session) {
 		//开始连接

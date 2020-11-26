@@ -1,0 +1,4 @@
+linux:
+    cmd: "gnome-screenshot --file=%FILE%"
+windows:
+    cmd: "nircmd savescreenshot %FILE%"

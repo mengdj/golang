@@ -1,0 +1,75 @@
+syntax = "proto2";
+package proc;
+import public "head.proto";
+
+message Cmd{
+    required Head head=1;
+    required Content content=2;
+}
+
+message Content{
+    //内容类型
+    required ContentType type=1 [default=PING];
+    //内容来源
+    required Source source=2 [default=SERVER];
+    //内容体
+    oneof param{
+         Ping ping=3;
+         Capture capture=4;
+         Chat chat=5;
+         Rpc rpc=6;
+    }
+    //附加数据（可选）
+    optional bytes extra=7;
+}
+
+enum ContentType{
+     //option allow_alias=true;
+     PING=1;
+     CAPTURE=2;
+     CHAT=3;
+     BROADCAST=4;
+     RPC=5;
+}
+
+//消息来源
+enum Source{
+    SERVER=1;
+    CLIENT=2;
+}
+
+//
+message Ping{
+    //主机名
+    optional string name=1;
+    //触发ping的时间，此值可用于后期判断传输质量
+    optional int64 time=2;
+}
+
+//截图
+message Capture{
+    //数据
+    optional bytes data=1;
+    //当前数据包编号
+    optional uint32 id=2 [default=0];
+    //数据包切分序列号
+    optional uint32 seq=3 [default=0];
+    //确认（传入确认号，确认号为服务器反馈收到的序号 id:seq）
+    optional uint32 ack=4 [default=0];
+    //是否有更多数据(分段，大数据)
+    optional bool more=5 [default=false];
+    //数据原始大小（整个包）
+    optional uint32 size=6 [default=0];
+    //是否是压缩数据 snappy
+    optional bool compress=7 [default=false];
+}
+
+message Chat{
+    //聊天
+    required string text=1;
+}
+
+message Rpc{
+    required string server=1;
+    required uint32 port=2;
+}

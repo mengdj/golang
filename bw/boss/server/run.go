@@ -1,10 +1,11 @@
 package server
 
 import (
+	"admin"
+	"admin/model"
 	"bufio"
 	"codec"
 	"context"
-	"encoding/json"
 	"ext"
 	"fmt"
 	"github.com/ThreeDotsLabs/watermill"
@@ -16,9 +17,11 @@ import (
 	"github.com/gogf/gf/container/gtype"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/nfnt/resize"
 	"github.com/panjf2000/gnet"
 	"github.com/panjf2000/gnet/pool/goroutine"
+	"github.com/robfig/cron"
 	"image"
 	"image/jpeg"
 	"os"
@@ -27,8 +30,6 @@ import (
 	"strings"
 	"time"
 	"tool"
-	"admin"
-	"admin/model"
 )
 
 const (
@@ -71,9 +72,12 @@ type App struct {
 	//在线连接
 	connects *ConnectContainer
 	//web服务器
-	web *admin.Web
+	web      *admin.Web
+	cronTask *cron.Cron
 	//消息处理
 	mill *ext.ExtGoChanel
+	//socket请求计数
+	reactQps *gtype.Uint64
 }
 
 func NewApp(logger *log4go.Logger, p model.Port) *App {
@@ -91,6 +95,8 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)", srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
 	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
 	this.web = admin.NewWeb(this.logger, this.mill, this.workerPool)
+	this.cronTask = cron.New()
+	this.reactQps = gtype.NewUint64(0)
 	//协议池
 	this.cmdPool = gpool.New(0, func() (interface{}, error) {
 		ret := new(proc.Cmd)
@@ -117,24 +123,36 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 		if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS); nil == err {
 			for {
 				select {
-				case <-messages:
+				case msg := <-messages:
 					//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
 					workers := []model.Worker{}
 					this.connects.Iterator(func(k string, v interface{}) bool {
 						tar := v.(*connectItem)
-						workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping})
+						workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping, Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg", k)})
 						return true
 					})
-					if res, err := json.Marshal(workers); nil == err {
+					this.logger.Info("当前在线客户:%d", this.connects.Size())
+					if res, err := jsoniter.Marshal(workers); nil == err {
 						this.mill.Publish(tool.QUERY_WORKERS_RESULT, message.NewMessage(watermill.NewUUID(), res))
 					}
+					msg.Ack()
 				}
 			}
 		} else {
 			this.logger.Error(err)
 		}
 	})
-	//处理接收到的截图并生成缩略图(后台任务)
+	//派发请求QPS
+	this.cronTask.AddFunc("*/1 * * * * *", func() {
+		ov := this.reactQps.Set(0)
+		if !this.mill.IsPause(tool.WORKER_QPS) {
+			//发送QPS到消息队列
+			if d, e := jsoniter.Marshal(model.Qps{Count: ov}); nil == e {
+				this.mill.Publish(tool.WORKER_QPS_RESULT, message.NewMessage(watermill.NewUUID(), d))
+			}
+		}
+	})
+	//处理接收到的截图并生成缩略图(后台任务,慢执行)
 	this.workerPool.Submit(func() {
 		if tasks, err := this.mill.Subscribe(context.Background(), tool.PROCESS_FOR_SLOW); nil == err {
 			for {
@@ -170,6 +188,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 			this.logger.Error(err)
 		}
 	})
+	this.cronTask.Start()
 	return
 }
 
@@ -181,7 +200,7 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 		if (now - tar.ping) > 10 {
 			//触发下线通知
 			if !this.mill.IsPause(tool.WORKER_OFFLINE) {
-				if d, e := json.Marshal(model.Worker{Addr: strings.Split(tar.conn.RemoteAddr().String(), ":")[0], Name: tar.name, Ping: tar.ping}); nil == e {
+				if d, e := jsoniter.Marshal(model.Worker{Addr: strings.Split(tar.conn.RemoteAddr().String(), ":")[0], Name: tar.name, Ping: tar.ping}); nil == e {
 					this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 				}
 			}
@@ -204,6 +223,7 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 }
 
 func (this *App) OnShutdown(svr gnet.Server) {
+	this.cronTask.Stop()
 	this.workerPool.Release()
 	this.chanBytePool.Close()
 	this.cmdPool.Close()
@@ -211,6 +231,8 @@ func (this *App) OnShutdown(svr gnet.Server) {
 
 func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
 	if action != gnet.Close && action != gnet.Shutdown {
+		//+1
+		this.reactQps.Add(1)
 		if len(frame) > 0 {
 			remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
 			//read
@@ -225,6 +247,8 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 								tar := this.connects.Get(remoteAddr).(*connectItem)
 								tar.ping = time.Now().Unix()
 								tar.name = *msg.Content.GetPing().Name
+								//update
+								this.connects.Set(remoteAddr, tar)
 							}
 							break
 						case proc.ContentType_CAPTURE:
@@ -235,12 +259,13 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 									if tmp, derr := snappy.Decode(nil, msg.Content.GetCapture().GetData()); nil == derr {
 										tar.cap.recv <- tmp
 									} else {
-										this.logger.Error(derr)
 										//恢复一个异常解码数据
+										this.logger.Error(derr)
 									}
 								} else {
 									tar.cap.recv <- msg.Content.GetCapture().GetData()
 								}
+								//回复确认
 							}
 							break
 						}
@@ -265,14 +290,17 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 			conitem.cap.recv = c
 		}
 	}
+	//+1
+	this.reactQps.Add(1)
 	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
+	mw := model.Worker{Addr: remoteAddr, Name: "", Ping: nowUnix, Status: true}
 	if !this.mill.IsPause(tool.WORKER_ONLINE) {
-		if d, e := json.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: nowUnix}); nil == e {
+		if d, e := jsoniter.Marshal(mw); nil == e {
 			this.mill.Publish(tool.WORKER_ONLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 		}
 	}
+	//同步库
 	this.connects.SetIfNotExist(remoteAddr, conitem)
-
 	//接收截图
 	this.workerPool.Submit(func() {
 		//匿名函数内部使用的只是指针的拷贝，可能对象已被释放(因此需要拷贝)
@@ -337,12 +365,15 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 
 func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	removeAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
+	//+1
+	this.reactQps.Add(1)
 	if this.connects.Contains(removeAddr) {
 		tar := this.connects.Get(removeAddr).(*connectItem)
 		if nil != tar {
 			//发布客户端离线消息
+			mw := model.Worker{Addr: removeAddr, Name: tar.name, Ping: tar.ping}
 			if !this.mill.IsPause(tool.WORKER_OFFLINE) {
-				if d, e := json.Marshal(model.Worker{Addr: removeAddr, Name: tar.name, Ping: tar.ping}); nil == e {
+				if d, e := jsoniter.Marshal(mw); nil == e {
 					this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 				}
 			}

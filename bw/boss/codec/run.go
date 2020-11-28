@@ -16,5 +16,5 @@ type Codec struct {
 }
 
 func NewCodec() *Codec {
-	return &Codec{gnet.NewLengthFieldBasedFrameCodec(gnet.EncoderConfig{binary.BigEndian, 4, -7, false}, gnet.DecoderConfig{binary.BigEndian, packageTagLength, 4, 0, 7})}
+	return &Codec{gnet.NewLengthFieldBasedFrameCodec(gnet.EncoderConfig{binary.BigEndian, 4, -3, false}, gnet.DecoderConfig{binary.BigEndian, packageTagLength, 4, 0, 7})}
 }

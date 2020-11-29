@@ -40,10 +40,11 @@ type Web struct {
 	mill      *ext.ExtGoChanel
 	goroutine *ants.Pool
 	bcount    *gtype.Int32
+	ctx       context.Context
 }
 
-func NewWeb(logger *log4go.Logger, m *ext.ExtGoChanel, p *ants.Pool) *Web {
-	return &Web{Engine: gin.New(), logger: logger, mill: m, goroutine: p, bcount: gtype.NewInt32(0)}
+func NewWeb(c context.Context, logger *log4go.Logger, m *ext.ExtGoChanel, p *ants.Pool) *Web {
+	return &Web{Engine: gin.New(), ctx: c, logger: logger, mill: m, goroutine: p, bcount: gtype.NewInt32(0)}
 }
 
 func (this *Web) Run(addr ...string) (err error) {
@@ -108,8 +109,13 @@ func (this *Web) Run(addr ...string) (err error) {
 					}
 				}
 				msg.Ack()
+			case <-this.ctx.Done():
+				//term
+				goto EXIT_CUR
 			}
 		}
+	EXIT_CUR:
+		//
 	})
 	return this.Engine.Run(addr...)
 }
@@ -143,14 +149,17 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 			if !this.mill.IsPause(tool.QUERY_WORKERS) {
 				this.goroutine.Submit(func() {
 					if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS_RESULT); nil == err {
-						msg := <-messages
-						workers := []model.Worker{}
-						if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
-							if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS_RESULT, Response: workers}); nil == err {
-								session.Write(res)
+						select {
+						case msg := <-messages:
+							workers := []model.Worker{}
+							if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
+								if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS_RESULT, Response: workers}); nil == err {
+									session.Write(res)
+								}
 							}
+						case <-this.ctx.Done():
+							break
 						}
-						msg.Ack()
 					}
 				})
 				this.mill.Publish(tool.QUERY_WORKERS, message.NewMessage(watermill.NewUUID(), []byte{}))

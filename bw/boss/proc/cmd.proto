@@ -18,9 +18,10 @@ message Content{
          Capture capture=4;
          Chat chat=5;
          Rpc rpc=6;
+         Close close=7;
     }
     //附加数据（可选）
-    optional bytes extra=7;
+    optional bytes extra=8;
 }
 
 enum ContentType{
@@ -29,12 +30,15 @@ enum ContentType{
      CAPTURE=2;
      CHAT=3;
      BROADCAST=4;
-     RPC=5;
+     CLOSE=5;
+     RPC=6;
 }
 
 //消息来源
 enum Source{
+    //包来自服务器
     SERVER=1;
+    //包来自客户端
     CLIENT=2;
 }
 
@@ -67,6 +71,11 @@ message Capture{
 message Chat{
     //聊天
     required string text=1;
+}
+
+message Close{
+    //关闭，可描述关闭原因
+    optional string reason=1;
 }
 
 message Rpc{

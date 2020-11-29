@@ -3,5 +3,6 @@ package proc;
 
 message Head{
     required string cmd=1 [default="CMD"];
+    //预留的长度(标识content包的长度)
     optional uint32 length=2 [default=0];
 }

@@ -213,7 +213,7 @@
             <div class="card bg-danger">
               <div class="card-body clearfix">
                 <div class="pull-right">
-                  <p class="h6 text-white m-t-0">用户总数</p>
+                  <p class="h6 text-white m-t-0">用户</p>
                   <p class="h3 text-white m-b-0 fa-1-5x" id="total_worker_num">0</p>
                 </div>
                 <div class="pull-left"> <span class="img-avatar img-avatar-48 bg-translucent"><i class="mdi mdi-account fa-1-5x"></i></span> </div>
@@ -225,8 +225,8 @@
             <div class="card bg-purple">
               <div class="card-body clearfix">
                 <div class="pull-right">
-                  <p class="h6 text-white m-t-0">在线用户</p>
-                  <p class="h3 text-white m-b-0 fa-1-5x" id="online_worker_num">0</p>
+                  <p class="h6 text-white m-t-0">QPS</p>
+                  <p class="h3 text-white m-b-0 fa-1-5x" id="qps_num_for_second">0</p>
                 </div>
                 <div class="pull-left"> <span class="img-avatar img-avatar-48 bg-translucent"><i class="mdi mdi-comment-outline fa-1-5x"></i></span> </div>
               </div>
@@ -238,7 +238,10 @@
           <div class="col-lg-12">
             <div class="card">
               <div class="card-header">
-                <h4>客户信息</h4>
+                <h4>客户信息(<span id="online_worker_num">0</span>)</h4>
+                <div class="btn-group btn-group-sm" style="float:right" role="group" aria-label="...">
+                  <button type="button" class="btn btn-default">刷新</button>
+                </div>
               </div>
               <div class="card-body">
                 <div class="row work-list">
@@ -266,11 +269,38 @@
 <script type="text/javascript" src="/static/js/main.min.js"></script>
 
 <script type="text/javascript">
-$(document).ready(function(e) {
-  //json数据
-  var ws = new WebSocket("ws://{{.server}}{{.port}}/ping");
+var intval={ping:{id:0},pong:{id:0,reply:0,count:0}};
+function stamp(){
+  return parseInt(+new Date()/1000);
+}
+function wsocket(server){
+  //处理websocket
+  var ws = new WebSocket(server);
   ws.onopen = function(evt) {
-      ws.send("QUERY_WORKERS");
+    ws.send("QUERY_WORKERS");
+    if(0==intval.ping.id){
+      intval.ping.id=setInterval(function(){
+        if(ws){
+          ws.send("PING")
+        }
+      },1000);
+      intval.pong.id=setInterval(function(){
+        //检查服务器是否掉线，是否需要重连(心跳包含其他数据包)
+        if(stamp()-intval.pong.reply>=10){
+          //可能掉线了
+          intval.pong.count++;
+          clearInterval(intval.ping.id);
+          clearInterval(intval.pong.id);
+          if(intval.pong.count<5){
+            //尝试重连
+            wsocket(server);
+          }else{
+            clearInterval(intval.ping.id);
+            clearInterval(intval.pong.id);
+          }
+        }
+      },1000);
+    }
   };
   ws.onmessage = function(evt) {
     eval("var data="+evt.data+";");
@@ -293,19 +323,25 @@ $(document).ready(function(e) {
         $("div.work-list").append('<div class="col-xs-6 col-md-3 work-item" id="worker-'+data.response.address.replace(/\./g,'_')+'"><a href="javascript:void(0)" class="thumbnail"><img src="/data/'+data.response.address+'/capture.jpg" alt=""></a></div>');
       }
       online_worker_num.text(parseInt(online_worker_num.text())+1);
-      if(total_worker_num.text()=="0"){
-        total_worker_num.text(online_worker_num.text());
-      }
     }else if("WORKER_OFFLINE_RESULT"==data.query){
       //客户下线
       $("div.work-list").find("div#worker-"+data.response.address.replace(/\./g,'_')+">a").css('border','1px solid red');
       online_worker_num.text(parseInt(online_worker_num.text())-1);
+    }else if("WORKER_QPS_RESULT"==data.query){
+      $("#qps_num_for_second").text(data.response.count);
     }
+    intval.pong.reply=stamp;
   };
   ws.onclose = function(evt) {
-  ws.send("CLOSE");
+    if(0!=intval.ping.id){
+      clearInterval(intval.ping.id);
+    }
+    if(0!=intval.pong.id){
+      clearInterval(intval.pong.id);
+    }
   };
-});
+}
+$(document).ready(function(e) {wsocket("ws://{{.server}}{{.port}}/ping?token={{.token}}");});
 </script>
 </body>
 </html>

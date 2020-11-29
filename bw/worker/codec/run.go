@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gogf/gf/net/gtcp"
-	"log"
 	"net"
 )
 
@@ -45,11 +44,9 @@ func (this *Codec) Read() (ret []byte, err error) {
 		return nil, err
 	}
 	length = int(binary.BigEndian.Uint32([]byte{buffer[3], buffer[4], buffer[5], buffer[6]}))
-	log.Println(length)
 	if length < 0 {
 		return nil, fmt.Errorf(`invalid package size %d`, length)
-	}
-	if length == 0 {
+	}else if length == 0 {
 		return nil, nil
 	}
 	return this.Recv(length)

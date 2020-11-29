@@ -1,8 +1,8 @@
 package admin
 
 import (
+	"admin/model"
 	"context"
-	"encoding/json"
 	"ext"
 	"fmt"
 	"github.com/ThreeDotsLabs/watermill"
@@ -11,11 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-session/gin-session"
 	"github.com/gogf/gf/container/gtype"
+	"github.com/json-iterator/go"
 	"github.com/panjf2000/ants/v2"
 	"gopkg.in/olahol/melody.v1"
 	"net/http"
 	"tool"
-	"admin/model"
 )
 
 //全局管理员
@@ -40,16 +40,17 @@ type Web struct {
 	mill      *ext.ExtGoChanel
 	goroutine *ants.Pool
 	bcount    *gtype.Int32
+	ctx       context.Context
 }
 
-func NewWeb(logger *log4go.Logger, m *ext.ExtGoChanel, p *ants.Pool) *Web {
-	return &Web{Engine: gin.New(), logger: logger, mill: m, goroutine: p, bcount: gtype.NewInt32(0)}
+func NewWeb(c context.Context, logger *log4go.Logger, m *ext.ExtGoChanel, p *ants.Pool) *Web {
+	return &Web{Engine: gin.New(), ctx: c, logger: logger, mill: m, goroutine: p, bcount: gtype.NewInt32(0)}
 }
 
 func (this *Web) Run(addr ...string) (err error) {
 	var (
-		msgOnline, msgOffline <-chan *message.Message
-		lody                  *melody.Melody
+		msgOnline, msgOffline, msgQps <-chan *message.Message
+		lody                          *melody.Melody
 	)
 	//基本配置
 	lody = melody.New()
@@ -68,38 +69,53 @@ func (this *Web) Run(addr ...string) (err error) {
 	this.logger.Info("管理地址:http://%s%s", serverAddr, addr[0])
 	this.logger.Info("管理账号:%s", globalUser.Account)
 	this.logger.Info("管理密码:%s", globalUser.Password)
-	//订阅消息(并处理消息)
+	//订阅消息(并处理消息 WORKER_ONLINE_RESULT WORKER_OFFLINE_RESULT为反馈给web端的客户上下线通知)
 	if msgOnline, err = this.mill.Subscribe(context.Background(), tool.WORKER_ONLINE_RESULT); nil != err {
 		return err
 	}
 	if msgOffline, err = this.mill.Subscribe(context.Background(), tool.WORKER_OFFLINE_RESULT); nil != err {
 		return err
 	}
+	if msgQps, err = this.mill.Subscribe(context.Background(), tool.WORKER_QPS_RESULT); nil != err {
+		return err
+	}
 	//先暂停此消息队列的发送，待管理员上线唤醒（节约资源）
-	this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE)
-	//广播WORKER上线消息(任何一个客户端上线都会触发此操作)
-	this.goroutine.Submit(func() {
-		for msg := range msgOnline {
-			worker:=model.Worker{}
-			if nil == json.Unmarshal(msg.Payload, &worker) {
-				if res, err := json.Marshal(Ping{Query: tool.WORKER_ONLINE_RESULT, Response: worker}); nil == err {
-					lody.Broadcast(res)
-				}
-			}
-			msg.Ack()
-		}
-	})
+	this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
 	//广播WORKER离线消息(任何一个客户端离线都会触发此操作)
 	this.goroutine.Submit(func() {
-		for msg := range msgOffline {
-			worker:=model.Worker{}
-			if nil == json.Unmarshal(msg.Payload, &worker) {
-				if res, err := json.Marshal(Ping{Query: tool.WORKER_OFFLINE_RESULT, Response: worker}); nil == err {
-					lody.Broadcast(res)
+		for {
+			select {
+			case msg := <-msgOnline:
+				worker := model.Worker{}
+				if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_ONLINE_RESULT, Response: worker}); nil == err {
+						lody.Broadcast(res)
+					}
 				}
+				msg.Ack()
+			case msg := <-msgOffline:
+				worker := model.Worker{}
+				if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_OFFLINE_RESULT, Response: worker}); nil == err {
+						lody.Broadcast(res)
+					}
+				}
+				msg.Ack()
+			case msg := <-msgQps:
+				qps := model.Qps{}
+				if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
+					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_QPS_RESULT, Response: qps}); nil == err {
+						lody.Broadcast(res)
+					}
+				}
+				msg.Ack()
+			case <-this.ctx.Done():
+				//term
+				goto EXIT_CUR
 			}
-			msg.Ack()
 		}
+	EXIT_CUR:
+		//
 	})
 	return this.Engine.Run(addr...)
 }
@@ -114,37 +130,48 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 	lody.HandleConnect(func(session *melody.Session) {
 		//开始连接
 		this.bcount.Add(1)
-		this.mill.Continue(tool.WORKER_ONLINE, tool.WORKER_OFFLINE)
+		this.mill.Continue(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
 	})
 	lody.HandleDisconnect(func(session *melody.Session) {
 		//丢失连接
 		this.bcount.Add(-1)
 		if this.bcount.Val() == 0 {
-			//暂时屏蔽信息
-			this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE)
+			//暂时屏蔽信息(所有管理都下线了就不再发送消息了)
+			this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
 		}
 	})
 	lody.HandleMessage(func(session *melody.Session, bytes []byte) {
 		//处理消息
-		query:=string(bytes)
+		query := string(bytes)
 		switch query {
 		case tool.QUERY_WORKERS:
 			//查询所有在线客户端数据
 			if !this.mill.IsPause(tool.QUERY_WORKERS) {
 				this.goroutine.Submit(func() {
 					if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS_RESULT); nil == err {
-						msg := <-messages
-						workers := []model.Worker{}
-						if nil == json.Unmarshal(msg.Payload, &workers) {
-							if res, err := json.Marshal(Ping{Query: tool.QUERY_WORKERS_RESULT, Response: workers}); nil == err {
-								session.Write(res)
+						select {
+						case msg := <-messages:
+							workers := []model.Worker{}
+							if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
+								if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS_RESULT, Response: workers}); nil == err {
+									session.Write(res)
+								}
 							}
+						case <-this.ctx.Done():
+							break
 						}
-						msg.Ack()
 					}
 				})
 				this.mill.Publish(tool.QUERY_WORKERS, message.NewMessage(watermill.NewUUID(), []byte{}))
+			} else {
+				this.logger.Warn("%s已被暂停", tool.QUERY_WORKERS)
 			}
+			break
+		case tool.QUERY_PING:
+			if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_PING, Response: []byte("PONG")}); nil == err {
+				session.Write(res)
+			}
+			break
 		}
 	})
 	this.Use(crosHandler)
@@ -235,8 +262,7 @@ func authHandler(c *gin.Context) {
 			c.Abort()
 		}
 	} else {
-		c.JSON(http.StatusUnauthorized, "未授权的操作，请重新登录")
-		c.Abort()
+		c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("/v1?token=%s", token))
 	}
 	c.Set("token", token)
 	c.Next()

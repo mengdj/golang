@@ -42,9 +42,9 @@ type None = struct{}
 
 type capture struct {
 	//接收数据
-	recv   chan []byte
+	recv chan []byte
 	//文件指针
-	file   *os.File
+	file *os.File
 	//是否允许接受
 	status *gtype.Bool
 }
@@ -194,6 +194,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 							this.logger.Warn(errs)
 						}
 					}
+					//必须要确认，否会重复的
 					task.Ack()
 				case <-this.ctx.Done():
 					goto PROCESS_FOR_SLOW
@@ -209,13 +210,12 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 }
 
 func (this *App) Tick() (delay time.Duration, action gnet.Action) {
-	now := time.Now().Unix()
 	active := 0
 	this.connects.Iterator(func(k string, v interface{}) bool {
 		tar := v.(*connectItem)
 		//超过10秒未收到心跳消息则关闭连接
-		if (now - tar.ping) > 10 {
-			if err:=this.close(tar, "超时未收到心跳包");nil!=err{
+		if (tool.Now() - tar.ping) > 10 {
+			if err := this.close(tar, "超时未收到心跳包"); nil != err {
 				this.logger.Warn(err)
 			}
 		} else {
@@ -258,17 +258,18 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 							//处理PING请求(用ping请求来辅助检测客户端是否还存活)
 							if this.connects.Contains(remoteAddr) {
 								tar := this.connects.Get(remoteAddr).(*connectItem)
-								tar.ping = time.Now().Unix()
+								tar.ping = tool.Now()
 								tar.name = *msg.Content.GetPing().Name
 								this.connects.Set(remoteAddr, tar)
+								//reply
+								this.ping(tar)
 							}
-							//reply
 							break
 						case proc.ContentType_CAPTURE:
 							//发送数据给接收者接收文件数据(状态异常就丢弃数据了，防止都塞)
 							if this.connects.Contains(remoteAddr) {
 								tar := this.connects.Get(remoteAddr).(*connectItem)
-								if tar.cap.status.Val(){
+								if tar.cap.status.Val() {
 									if *(msg.Content.GetCapture().Compress) {
 										if tmp, derr := snappy.Decode(nil, msg.Content.GetCapture().GetData()); nil == derr {
 											tar.cap.recv <- tmp
@@ -297,8 +298,7 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	//只取ip即可，无需端口
 	remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
-	nowUnix := time.Now().Unix()
-	conitem := &connectItem{conn: c, close: make(chan None), ping: nowUnix}
+	conitem := &connectItem{conn: c, close: make(chan None), ping: tool.Now()}
 	conitem.cap = capture{nil, nil, gtype.NewBool(true)}
 	if i, e := this.chanBytePool.Get(); nil == e {
 		if c, ok := i.(chan []byte); ok {
@@ -309,7 +309,7 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	this.reactQps.Add(1)
 	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
 	if !this.mill.IsPause(tool.WORKER_ONLINE) {
-		if d, e := jsoniter.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: nowUnix, Status: true}); nil == e {
+		if d, e := jsoniter.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: tool.Now(), Status: true}); nil == e {
 			this.mill.Publish(tool.WORKER_ONLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
 		}
 	}
@@ -413,6 +413,38 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	return
 }
 
+//PING确认(对于客户端的心跳请求进行回应)
+func (this *App) ping(tar *connectItem) error {
+	cmd, err := this.cmdPool.Get()
+	defer func() {
+		this.cmdPool.Put(cmd)
+	}()
+	if nil != err {
+		return err
+	}
+	msg := cmd.(*proc.Cmd)
+	var (
+		contentType  proc.ContentType = proc.ContentType_PING
+		packetSource proc.Source      = PACKET_SOURCE
+		packetTag    string           = PACKET_TAG
+	)
+	msg.Head.Cmd = &packetTag
+	msg.Content.Type = &contentType
+	msg.Content.Source = &packetSource
+	//获取本机服务名称和时间
+	nowUnix := tool.Now()
+	hostName, _ := os.Hostname()
+	msg.Content.Param = &proc.Content_Ping{&proc.Ping{Name: &hostName, Time: &nowUnix}}
+	if buf, errz := proto.Marshal(msg); nil == errz {
+		if errz = tar.conn.AsyncWrite(buf); nil != errz {
+			this.logger.Warn(errz)
+		}
+	} else {
+		this.logger.Warn(errz)
+	}
+	return err
+}
+
 //关闭客户端连接(仅提醒)
 func (this *App) close(tar *connectItem, reason string) error {
 	this.logger.Debug("关闭客户端:%s(%s)", tar.name, reason)
@@ -420,7 +452,7 @@ func (this *App) close(tar *connectItem, reason string) error {
 	cmd, err := this.cmdPool.Get()
 	defer func() {
 		if tar.cap.status.Val() {
-			//结束接收数据进程
+			//结束接收数据进程(可能会painc)
 			tool.Try(func() {
 				tar.close <- None{}
 			}, func(i interface{}) {

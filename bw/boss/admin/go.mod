@@ -16,8 +16,6 @@ require (
 	github.com/panjf2000/ants/v2 v2.4.3
 	github.com/smartystreets/goconvey v1.6.4 // indirect
 	gopkg.in/olahol/melody.v1 v1.0.0-20170518105555-d52139073376
-	gorm.io/driver/sqlite v1.1.4
-	gorm.io/gorm v1.20.7
 	tool v0.0.0
 )
 

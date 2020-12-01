@@ -15,6 +15,7 @@ import (
 	"github.com/gogf/gf/container/gmap"
 	"github.com/gogf/gf/container/gpool"
 	"github.com/gogf/gf/container/gtype"
+	"github.com/gogf/gf/text/gstr"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
 	jsoniter "github.com/json-iterator/go"
@@ -54,6 +55,8 @@ type connectItem = struct {
 	conn gnet.Conn
 	//客户端机器名称
 	name string
+	//ip
+	addr string
 	//捕捉数据接受channel
 	cap capture
 	//客户端断开channel
@@ -102,7 +105,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	//协程池
 	this.workerPool = goroutine.Default()
 	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)", srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
-	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: true, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
+	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: false, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
 	this.web = admin.NewWeb(this.ctx, this.logger, this.mill, this.workerPool)
 	this.cronTask = cron.New()
 	this.reactQps = gtype.NewUint64(0)
@@ -115,7 +118,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	}, nil)
 	//切片池
 	this.chanBytePool = gpool.New(0, func() (interface{}, error) {
-		return make(chan []byte), nil
+		return make(chan []byte, 5), nil
 	}, func(i interface{}) {
 		if c, ok := i.(chan []byte); ok {
 			close(c)
@@ -129,27 +132,36 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	})
 	//订阅查询所有客户端消息，给其他查询
 	this.workerPool.Submit(func() {
-		if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS); nil == err {
+		if messages, err := this.mill.Subscribe(this.ctx, tool.WORKER_ADMIN_CTX); nil == err {
 			for {
 				select {
 				case msg := <-messages:
-					//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
-					workers := []model.Worker{}
-					this.connects.Iterator(func(k string, v interface{}) bool {
-						tar := v.(*connectItem)
-						workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping, Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg", k)})
-						return true
-					})
-					this.logger.Info("当前在线客户:%d", this.connects.Size())
-					if res, err := jsoniter.Marshal(workers); nil == err {
-						this.mill.Publish(tool.QUERY_WORKERS_RESULT, message.NewMessage(watermill.NewUUID(), res))
+					switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+					case tool.QUERY_WORKERS:
+						//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
+						workers := []model.Worker{}
+						this.connects.Iterator(func(k string, v interface{}) bool {
+							tar := v.(*connectItem)
+							workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping, Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", k, tool.Now())})
+							return true
+						})
+						this.logger.Info("当前在线客户:%d", this.connects.Size())
+						if res, err := jsoniter.Marshal(workers); nil == err {
+							this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(res, tool.QUERY_WORKERS))
+						}
+						break
+					case tool.REFRESH_SELECTED_WORKER:
+						//获取客户器的最新状态(交给耗时任务来完成)
+						this.mill.Publish(tool.PROCESS_FOR_SLOW, ext.NewMessage(msg.Payload, tool.PROCESS_FOR_SLOW_TYPE, tool.REFRESH_SELECTED_WORKER))
+						break
 					}
 					msg.Ack()
+					break
 				case <-this.ctx.Done():
-					goto QUERY_WORKERS
+					goto WORKER_ADMIN_CTX
 				}
 			}
-		QUERY_WORKERS:
+		WORKER_ADMIN_CTX:
 			//CODE
 		} else {
 			this.logger.Error(err)
@@ -158,20 +170,21 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	//派发请求QPS
 	this.cronTask.AddFunc("*/1 * * * * *", func() {
 		ov := this.reactQps.Set(0)
-		if !this.mill.IsPause(tool.WORKER_QPS) {
+		if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
 			//发送QPS到消息队列
 			if d, e := jsoniter.Marshal(model.Qps{Count: ov}); nil == e {
-				this.mill.Publish(tool.WORKER_QPS_RESULT, message.NewMessage(watermill.NewUUID(), d))
+				this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_QPS))
 			}
 		}
 	})
-	//处理接收到的截图并生成缩略图(后台任务,慢执行)
+	//处理接收到的截图并生成缩略图(后台任务,慢执行，处理比较耗时的操作)
 	this.workerPool.Submit(func() {
-		if tasks, err := this.mill.Subscribe(context.Background(), tool.PROCESS_FOR_SLOW); nil == err {
+		if tasks, err := this.mill.Subscribe(this.ctx, tool.PROCESS_FOR_SLOW); nil == err {
 			for {
 				select {
 				case task := <-tasks:
-					if "build_capture" == task.Metadata.Get("name") {
+					switch task.Metadata.Get(tool.PROCESS_FOR_SLOW_TYPE) {
+					case "build_capture":
 						//生成缩略图(方便给其他接口处理)
 						spath := string(task.Payload)
 						if sf, errs := os.Open(spath); nil == errs {
@@ -180,6 +193,12 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 									if tf, errt := os.OpenFile(fmt.Sprintf("%s/capture_thumb%s", filepath.Dir(spath), filepath.Ext(spath)), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == errt {
 										if erre := jpeg.Encode(tf, nimg, &jpeg.Options{Quality: 90}); nil != erre {
 											this.logger.Warn(erre)
+										} else {
+											if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
+												if d, e := jsoniter.Marshal(model.Worker{Addr: task.Metadata.Get("addr"), Name: task.Metadata.Get("name"), Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", task.Metadata.Get("addr"), tool.Now()), Status: true}); nil == e {
+													this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_UPDATE))
+												}
+											}
 										}
 										tf.Close()
 									} else {
@@ -193,8 +212,22 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 						} else {
 							this.logger.Warn(errs)
 						}
+						break
+					case tool.REFRESH_SELECTED_WORKER:
+						//刷新客户机状态
+						if ips := gstr.Explode(";", string(task.Payload)); len(ips) > 0 {
+							this.connects.Iterator(func(k string, v interface{}) bool {
+								if tar := v.(*connectItem); nil != tar {
+									//构造发送截图数据(点对点派发给客户机)
+									if gstr.InArray(ips, tar.addr) {
+										this.capture(tar)
+									}
+								}
+								return true
+							})
+						}
 					}
-					//必须要确认，否会重复的
+					/** 必须要确认，否会重复的,如果存在多个订阅者，必须每个订阅者都确认，否则会一直发的(watermill默认规则) */
 					task.Ack()
 				case <-this.ctx.Done():
 					goto PROCESS_FOR_SLOW
@@ -214,7 +247,7 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 	this.connects.Iterator(func(k string, v interface{}) bool {
 		tar := v.(*connectItem)
 		//超过10秒未收到心跳消息则关闭连接
-		if (tool.Now() - tar.ping) > 10 {
+		if (tool.Now() - tar.ping) >= 10 {
 			if err := this.close(tar, "超时未收到心跳包"); nil != err {
 				this.logger.Warn(err)
 			}
@@ -225,7 +258,7 @@ func (this *App) Tick() (delay time.Duration, action gnet.Action) {
 	})
 	if active == 0 {
 		//适当延迟数据
-		return time.Second * 3, gnet.None
+		return time.Second * 2, gnet.None
 	}
 	return time.Second * 1, gnet.None
 }
@@ -298,7 +331,7 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	//只取ip即可，无需端口
 	remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
-	conitem := &connectItem{conn: c, close: make(chan None), ping: tool.Now()}
+	conitem := &connectItem{conn: c, addr: remoteAddr, close: make(chan None), ping: tool.Now()}
 	conitem.cap = capture{nil, nil, gtype.NewBool(true)}
 	if i, e := this.chanBytePool.Get(); nil == e {
 		if c, ok := i.(chan []byte); ok {
@@ -308,9 +341,9 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	//+1
 	this.reactQps.Add(1)
 	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
-	if !this.mill.IsPause(tool.WORKER_ONLINE) {
+	if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
 		if d, e := jsoniter.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: tool.Now(), Status: true}); nil == e {
-			this.mill.Publish(tool.WORKER_ONLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+			this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_ONLINE))
 		}
 	}
 	//接收截图
@@ -357,7 +390,9 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 										item.cap.file.Close()
 										item.cap.file = nil
 										if nm := message.NewMessage(watermill.NewUUID(), []byte(save)); nil != nm {
-											nm.Metadata.Set("name", "build_capture")
+											nm.Metadata.Set(tool.PROCESS_FOR_SLOW_TYPE, "build_capture")
+											nm.Metadata.Set("name", item.name)
+											nm.Metadata.Set("addr", item.addr)
 											this.mill.Publish(tool.PROCESS_FOR_SLOW, nm)
 										}
 									}
@@ -394,9 +429,9 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 		tar := this.connects.Get(removeAddr).(*connectItem)
 		if nil != tar {
 			//发布客户端离线消息
-			if !this.mill.IsPause(tool.WORKER_OFFLINE) {
+			if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
 				if d, e := jsoniter.Marshal(model.Worker{Addr: removeAddr, Status: false, Name: tar.name, Ping: tar.ping}); nil == e {
-					this.mill.Publish(tool.WORKER_OFFLINE_RESULT, message.NewMessage(watermill.NewUUID(), d))
+					this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_OFFLINE))
 				}
 			}
 			if tar.cap.status.Val() {
@@ -411,6 +446,36 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 		}
 	}
 	return
+}
+
+//PING确认(对于客户端的心跳请求进行回应)
+func (this *App) capture(tar *connectItem) error {
+	cmd, err := this.cmdPool.Get()
+	defer func() {
+		this.cmdPool.Put(cmd)
+	}()
+	if nil != err {
+		return err
+	}
+	msg := cmd.(*proc.Cmd)
+	var (
+		contentType  proc.ContentType = proc.ContentType_CAPTURE
+		packetSource proc.Source      = PACKET_SOURCE
+		packetTag    string           = PACKET_TAG
+	)
+	msg.Head.Cmd = &packetTag
+	msg.Content.Type = &contentType
+	msg.Content.Source = &packetSource
+	//给客户端发送直接丢空包即可
+	msg.Content.Param = &proc.Content_Capture{&proc.Capture{}}
+	if buf, errz := proto.Marshal(msg); nil == errz {
+		if errz = tar.conn.AsyncWrite(buf); nil != errz {
+			this.logger.Warn(errz)
+		}
+	} else {
+		this.logger.Warn(errz)
+	}
+	return err
 }
 
 //PING确认(对于客户端的心跳请求进行回应)

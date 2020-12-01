@@ -5,16 +5,17 @@ import (
 	"context"
 	"ext"
 	"fmt"
-	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/alecthomas/log4go"
 	"github.com/gin-gonic/gin"
 	"github.com/go-session/gin-session"
 	"github.com/gogf/gf/container/gtype"
+	"github.com/gogf/gf/text/gstr"
 	"github.com/json-iterator/go"
 	"github.com/panjf2000/ants/v2"
 	"gopkg.in/olahol/melody.v1"
 	"net/http"
+	"time"
 	"tool"
 )
 
@@ -49,8 +50,8 @@ func NewWeb(c context.Context, logger *log4go.Logger, m *ext.ExtGoChanel, p *ant
 
 func (this *Web) Run(addr ...string) (err error) {
 	var (
-		msgOnline, msgOffline, msgQps <-chan *message.Message
-		lody                          *melody.Melody
+		messages <-chan *message.Message
+		lody     *melody.Melody
 	)
 	//基本配置
 	lody = melody.New()
@@ -69,53 +70,56 @@ func (this *Web) Run(addr ...string) (err error) {
 	this.logger.Info("管理地址:http://%s%s", serverAddr, addr[0])
 	this.logger.Info("管理账号:%s", globalUser.Account)
 	this.logger.Info("管理密码:%s", globalUser.Password)
-	//订阅消息(并处理消息 WORKER_ONLINE_RESULT WORKER_OFFLINE_RESULT为反馈给web端的客户上下线通知)
-	if msgOnline, err = this.mill.Subscribe(context.Background(), tool.WORKER_ONLINE_RESULT); nil != err {
-		return err
-	}
-	if msgOffline, err = this.mill.Subscribe(context.Background(), tool.WORKER_OFFLINE_RESULT); nil != err {
-		return err
-	}
-	if msgQps, err = this.mill.Subscribe(context.Background(), tool.WORKER_QPS_RESULT); nil != err {
+	this.logger.Info("结束服务请按组合键:CTRL+C")
+	//订阅消息(并处理消息 WORKER_ADMIN_CTX_RESULT为反馈给web端的客户上下线通知)
+	if messages, err = this.mill.Subscribe(this.ctx, tool.WORKER_ADMIN_CTX_RESULT); nil != err {
 		return err
 	}
 	//先暂停此消息队列的发送，待管理员上线唤醒（节约资源）
-	this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
+	this.mill.Pause(tool.WORKER_ADMIN_CTX)
 	//广播WORKER离线消息(任何一个客户端离线都会触发此操作)
 	this.goroutine.Submit(func() {
 		for {
 			select {
-			case msg := <-msgOnline:
-				worker := model.Worker{}
-				if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
-					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_ONLINE_RESULT, Response: worker}); nil == err {
-						lody.Broadcast(res)
-					}
-				}
+			case msg := <-messages:
 				msg.Ack()
-			case msg := <-msgOffline:
-				worker := model.Worker{}
-				if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
-					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_OFFLINE_RESULT, Response: worker}); nil == err {
-						lody.Broadcast(res)
+				meta := msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE)
+				switch meta {
+				case tool.WORKER_ONLINE, tool.WORKER_OFFLINE:
+					//上线 离线
+					worker := model.Worker{}
+					if tool.WORKER_ONLINE == meta {
+						if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_ONLINE, Response: worker}); nil == err {
+								lody.Broadcast(res)
+							}
+						}
+					} else {
+						if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_OFFLINE, Response: worker}); nil == err {
+								lody.Broadcast(res)
+							}
+						}
 					}
-				}
-				msg.Ack()
-			case msg := <-msgQps:
-				qps := model.Qps{}
-				if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
-					if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_QPS_RESULT, Response: qps}); nil == err {
-						lody.Broadcast(res)
+					break
+				case tool.WORKER_QPS:
+					//QPS
+					qps := model.Qps{}
+					if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
+						if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_QPS, Response: qps}); nil == err {
+							lody.Broadcast(res)
+						}
 					}
+					break
 				}
-				msg.Ack()
+				break
 			case <-this.ctx.Done():
 				//term
 				goto EXIT_CUR
 			}
 		}
 	EXIT_CUR:
-		//
+		//code here
 	})
 	return this.Engine.Run(addr...)
 }
@@ -130,14 +134,15 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 	lody.HandleConnect(func(session *melody.Session) {
 		//开始连接
 		this.bcount.Add(1)
-		this.mill.Continue(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
+		this.mill.Continue(tool.WORKER_ADMIN_CTX)
+		//创建独自的消息队列处理请求消息
 	})
 	lody.HandleDisconnect(func(session *melody.Session) {
 		//丢失连接
 		this.bcount.Add(-1)
 		if this.bcount.Val() == 0 {
 			//暂时屏蔽信息(所有管理都下线了就不再发送消息了)
-			this.mill.Pause(tool.WORKER_ONLINE, tool.WORKER_OFFLINE, tool.WORKER_QPS)
+			this.mill.Pause(tool.WORKER_ADMIN_CTX)
 		}
 	})
 	lody.HandleMessage(func(session *melody.Session, bytes []byte) {
@@ -145,33 +150,80 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 		query := string(bytes)
 		switch query {
 		case tool.QUERY_WORKERS:
-			//查询所有在线客户端数据
-			if !this.mill.IsPause(tool.QUERY_WORKERS) {
-				this.goroutine.Submit(func() {
-					if messages, err := this.mill.Subscribe(context.Background(), tool.QUERY_WORKERS_RESULT); nil == err {
-						select {
-						case msg := <-messages:
+			//5秒钟没有返回结果则退出协程
+			ctxTimeout, _ := context.WithTimeout(this.ctx, time.Second*5)
+			this.goroutine.Submit(func() {
+				if messages, err := this.mill.Subscribe(ctxTimeout, tool.WORKER_ADMIN_CTX_RESULT); nil == err {
+					select {
+					case msg := <-messages:
+						msg.Ack()
+						switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+						case tool.QUERY_WORKERS:
 							workers := []model.Worker{}
 							if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
-								if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS_RESULT, Response: workers}); nil == err {
-									session.Write(res)
+								if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS, Response: workers}); nil == err {
+									//请求需要时间
+									if !session.IsClosed() {
+										session.Write(res)
+									}
 								}
 							}
-						case <-this.ctx.Done():
 							break
 						}
+
+						break
+					case <-ctxTimeout.Done():
+						break
 					}
-				})
-				this.mill.Publish(tool.QUERY_WORKERS, message.NewMessage(watermill.NewUUID(), []byte{}))
-			} else {
-				this.logger.Warn("%s已被暂停", tool.QUERY_WORKERS)
-			}
+				}
+			})
+			this.mill.Publish(tool.WORKER_ADMIN_CTX, ext.NewAdminSubTypeMessage([]byte{}, tool.QUERY_WORKERS))
 			break
 		case tool.QUERY_PING:
+			//回复心跳消息
 			if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_PING, Response: []byte("PONG")}); nil == err {
 				session.Write(res)
 			}
 			break
+		default:
+			//处理其他信息
+			if pos := gstr.Pos(query, tool.REFRESH_SELECTED_WORKER); -1 != pos {
+				//刷新客户信息(REFRESH_SELECTED_WORKER:ip1;ip2;ip3)
+				if ips := gstr.SubStr(query, pos+len(tool.REFRESH_SELECTED_WORKER)+1); "" != ips {
+					//15秒钟没有返回结果则退出协程(截图比较耗时)
+					ctxTimeout, _ := context.WithTimeout(this.ctx, time.Second*15)
+					this.goroutine.Submit(func() {
+						if messages, err := this.mill.Subscribe(ctxTimeout, tool.WORKER_ADMIN_CTX_RESULT); nil == err {
+							//可能有多台主机,因此循环
+							for {
+								select {
+								case msg := <-messages:
+									msg.Ack()
+									switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+									case tool.WORKER_UPDATE:
+										worker := model.Worker{}
+										if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+											if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_UPDATE, Response: worker}); nil == err {
+												//请求需要时间(搞不好就关闭了)
+												if !session.IsClosed() {
+													session.Write(res)
+												}
+											}
+										}
+										break
+									}
+									break
+								case <-ctxTimeout.Done():
+									goto EXIT_UPDATE
+								}
+							}
+						EXIT_UPDATE:
+							//code here
+						}
+					})
+					this.mill.Publish(tool.WORKER_ADMIN_CTX, ext.NewAdminSubTypeMessage([]byte(ips), tool.REFRESH_SELECTED_WORKER))
+				}
+			}
 		}
 	})
 	this.Use(crosHandler)

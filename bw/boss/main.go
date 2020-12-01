@@ -61,5 +61,5 @@ func main() {
 	//等待线下资源结束
 	waitTask.Wait()
 	antsPool.Release()
-	logger.Info("关闭服务器")
+	logger.Info("服务器已关闭，感谢您的使用")
 }

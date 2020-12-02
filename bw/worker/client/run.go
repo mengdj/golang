@@ -133,17 +133,19 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 						case <-ctx.Done():
 							goto EXIT_W
 						case msg := <-writeMessage:
-							e := this.packCodec.Write(msg.Payload)
-							msg.Ack()
-							if nil != e {
-								if syscall.EINVAL == e {
-									this.logger.Warn(e)
-									connectCancelCtx()
-								} else {
-									this.logger.Warn(e)
-									//process
-									if _, ok := e.(*net.OpError); ok {
+							if nil != msg {
+								e := this.packCodec.Write(msg.Payload)
+								msg.Ack()
+								if nil != e {
+									if syscall.EINVAL == e {
+										this.logger.Warn(e)
 										connectCancelCtx()
+									} else {
+										this.logger.Warn(e)
+										//process
+										if _, ok := e.(*net.OpError); ok {
+											connectCancelCtx()
+										}
 									}
 								}
 							}

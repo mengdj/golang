@@ -16,6 +16,12 @@ func Try(f func(), e func(i interface{})) {
 	f()
 }
 
+func If(ok bool,f func()){
+	if ok{
+		f()
+	}
+}
+
 func Now() int64 {
 	return time.Now().Unix()
 }

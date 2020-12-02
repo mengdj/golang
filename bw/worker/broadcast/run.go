@@ -58,6 +58,8 @@ func (this *Broadcast) Start(ctx context.Context, listenPort uint32, pub *ext.Ex
 							this.logger.Warn(err)
 						}
 					}
+				}else{
+					this.logger.Critical(retErr)
 				}
 			}
 		}()

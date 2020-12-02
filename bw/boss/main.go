@@ -4,6 +4,9 @@ import (
 	"admin/model"
 	"broadcast"
 	"context"
+	"ext"
+	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alecthomas/log4go"
 	"github.com/panjf2000/ants/v2"
 	"os"
@@ -21,45 +24,45 @@ const (
 
 func main() {
 	var (
-		antsPool *ants.Pool
-		signChan chan os.Signal
-		err      error
-		waitTask sync.WaitGroup
+		goroutine *ants.Pool
+		err       error
+		multiTask sync.WaitGroup
 	)
 	logger := log4go.NewDefaultLogger(log4go.DEBUG)
 	logger.LoadConfiguration("config/log4go.xml")
+	pubSub := ext.NewExtGoChannel(gochannel.Config{Persistent: false, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	antsPool, err = ants.NewPool(5, ants.WithPreAlloc(false))
+	goroutine, err = ants.NewPool(2, ants.WithPreAlloc(false))
+	//遵循 一个协程不知道停止它，就不要创建它的原则 避免内存泄漏
+	signTermChan := make(chan os.Signal)
+	defer func() {
+		goroutine.Release()
+		close(signTermChan)
+		pubSub.Close()
+		logger.Close()
+	}()
 	if nil != err {
 		panic(err)
 	}
-	//遵循 一个协程不知道停止它，就不要创建它的原则 避免内存泄漏
-	signChan = make(chan os.Signal)
-	defer func() {
-		close(signChan)
-		logger.Close()
-	}()
-	signal.Notify(signChan, syscall.SIGINT, syscall.SIGTERM)
-	borad := broadcast.NewBroadcast(&logger)
-	applic := server.NewApp(ctx, &logger, model.Port{BROADCAST_LISTEN_PORT, WEB_LISTEN_PORT})
-	antsPool.Submit(func() {
-		waitTask.Add(1)
-		if err := borad.Start(ctx, BROADCAST_LISTEN_PORT, BROADCAST_PORT); err != nil {
+	signal.Notify(signTermChan, syscall.SIGINT, syscall.SIGTERM)
+	serverBroadcast := broadcast.NewBroadcast(&logger)
+	serverApplication := server.NewApp(ctx, pubSub, &logger, model.Port{BROADCAST_LISTEN_PORT, WEB_LISTEN_PORT})
+	goroutine.Submit(func() {
+		multiTask.Add(1)
+		if err := serverBroadcast.Start(ctx, BROADCAST_LISTEN_PORT, BROADCAST_PORT); err != nil {
 			logger.Error("broadcast: %s\n", err)
 		}
-		waitTask.Done()
+		multiTask.Done()
 	})
-	antsPool.Submit(func() {
-		waitTask.Add(1)
-		if err := applic.Start(ctx); nil != err {
+	goroutine.Submit(func() {
+		multiTask.Add(1)
+		if err := serverApplication.Start(ctx); nil != err {
 			logger.Error("server: %s\n", err)
 		}
-		waitTask.Done()
+		multiTask.Done()
 	})
-	<-signChan
+	<-signTermChan
 	cancelCtx()
-	//等待线下资源结束
-	waitTask.Wait()
-	antsPool.Release()
+	multiTask.Wait()
 	logger.Info("服务器已关闭，感谢您的使用")
 }

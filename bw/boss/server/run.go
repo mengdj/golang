@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alecthomas/log4go"
 	"github.com/gogf/gf/container/gmap"
 	"github.com/gogf/gf/container/gpool"
@@ -69,9 +68,10 @@ type ConnectContainer = gmap.StrAnyMap
 
 type App struct {
 	*gnet.EventServer
+	//配置借口数据
 	port model.Port
 	//协程池
-	workerPool *goroutine.Pool
+	goroutinePool *goroutine.Pool
 	//协议处理
 	cmdPool *gpool.Pool
 	//chan切片池
@@ -92,8 +92,8 @@ type App struct {
 	ctx context.Context
 }
 
-func NewApp(c context.Context, logger *log4go.Logger, p model.Port) *App {
-	return &App{ctx: c, logger: logger, connects: gmap.NewStrAnyMap(true), port: p}
+func NewApp(c context.Context, ps *ext.ExtGoChanel, logger *log4go.Logger, p model.Port) *App {
+	return &App{ctx: c, logger: logger, connects: gmap.NewStrAnyMap(true), port: p, mill: ps}
 }
 
 /** 使用自定义解码器解码 */
@@ -103,10 +103,9 @@ func (this *App) Start(ctx context.Context) error {
 
 func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	//协程池
-	this.workerPool = goroutine.Default()
+	this.goroutinePool = goroutine.Default()
 	this.logger.Info("启动成功 %s (multi-cores: %t, loops: %d)", srv.Addr.String(), srv.Multicore, srv.NumEventLoop)
-	this.mill = ext.NewExtGoChannel(gochannel.Config{Persistent: false, BlockPublishUntilSubscriberAck: false}, watermill.NewStdLogger(false, false))
-	this.web = admin.NewWeb(this.ctx, this.logger, this.mill, this.workerPool)
+	this.web = admin.NewWeb(this.ctx, this.logger, this.mill, this.goroutinePool)
 	this.cronTask = cron.New()
 	this.reactQps = gtype.NewUint64(0)
 	//协议池
@@ -125,38 +124,39 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 		}
 	})
 	//启动WEB服务器
-	this.workerPool.Submit(func() {
+	this.goroutinePool.Submit(func() {
 		if err := this.web.Run(fmt.Sprintf(":%d", this.port.Web)); nil != err {
 			this.logger.Critical(err)
 		}
 	})
 	//订阅查询所有客户端消息，给其他查询
-	this.workerPool.Submit(func() {
+	this.goroutinePool.Submit(func() {
 		if messages, err := this.mill.Subscribe(this.ctx, tool.WORKER_ADMIN_CTX); nil == err {
 			for {
 				select {
 				case msg := <-messages:
-					switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
-					case tool.QUERY_WORKERS:
-						//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
-						workers := []model.Worker{}
-						this.connects.Iterator(func(k string, v interface{}) bool {
-							tar := v.(*connectItem)
-							workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping, Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", k, tool.Now())})
-							return true
-						})
-						this.logger.Info("当前在线客户:%d", this.connects.Size())
-						if res, err := jsoniter.Marshal(workers); nil == err {
-							this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(res, tool.QUERY_WORKERS))
+					if nil != msg {
+						switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+						case tool.QUERY_WORKERS:
+							//查询所在的客户信息(传输到消息队列即可,切片拷贝的是地址，不用考虑)
+							workers := []model.Worker{}
+							this.connects.Iterator(func(k string, v interface{}) bool {
+								tar := v.(*connectItem)
+								workers = append(workers, model.Worker{Addr: k, Name: tar.name, Ping: tar.ping, Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", k, tool.Now())})
+								return true
+							})
+							this.logger.Info("当前在线客户:%d", this.connects.Size())
+							if res, err := jsoniter.Marshal(workers); nil == err {
+								this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(res, tool.QUERY_WORKERS))
+							}
+							break
+						case tool.REFRESH_SELECTED_WORKER:
+							//获取客户器的最新状态(交给耗时任务来完成)
+							this.mill.Publish(tool.PROCESS_FOR_SLOW, ext.NewMessage(msg.Payload, tool.PROCESS_FOR_SLOW_TYPE, tool.REFRESH_SELECTED_WORKER))
+							break
 						}
-						break
-					case tool.REFRESH_SELECTED_WORKER:
-						//获取客户器的最新状态(交给耗时任务来完成)
-						this.mill.Publish(tool.PROCESS_FOR_SLOW, ext.NewMessage(msg.Payload, tool.PROCESS_FOR_SLOW_TYPE, tool.REFRESH_SELECTED_WORKER))
-						break
+						msg.Ack()
 					}
-					msg.Ack()
-					break
 				case <-this.ctx.Done():
 					goto WORKER_ADMIN_CTX
 				}
@@ -178,57 +178,59 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 		}
 	})
 	//处理接收到的截图并生成缩略图(后台任务,慢执行，处理比较耗时的操作)
-	this.workerPool.Submit(func() {
+	this.goroutinePool.Submit(func() {
 		if tasks, err := this.mill.Subscribe(this.ctx, tool.PROCESS_FOR_SLOW); nil == err {
 			for {
 				select {
 				case task := <-tasks:
-					switch task.Metadata.Get(tool.PROCESS_FOR_SLOW_TYPE) {
-					case "build_capture":
-						//生成缩略图(方便给其他接口处理)
-						spath := string(task.Payload)
-						if sf, errs := os.Open(spath); nil == errs {
-							if img, _, erri := image.Decode(sf); nil == erri {
-								if nimg := resize.Resize(400, 0, img, resize.InterpolationFunction(resize.Lanczos3)); nil != nimg {
-									if tf, errt := os.OpenFile(fmt.Sprintf("%s/capture_thumb%s", filepath.Dir(spath), filepath.Ext(spath)), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == errt {
-										if erre := jpeg.Encode(tf, nimg, &jpeg.Options{Quality: 90}); nil != erre {
-											this.logger.Warn(erre)
-										} else {
-											if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
-												if d, e := jsoniter.Marshal(model.Worker{Addr: task.Metadata.Get("addr"), Name: task.Metadata.Get("name"), Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", task.Metadata.Get("addr"), tool.Now()), Status: true}); nil == e {
-													this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_UPDATE))
+					if nil != task {
+						switch task.Metadata.Get(tool.PROCESS_FOR_SLOW_TYPE) {
+						case "build_capture":
+							//生成缩略图(方便给其他接口处理)
+							spath := string(task.Payload)
+							if sf, errs := os.Open(spath); nil == errs {
+								if img, _, erri := image.Decode(sf); nil == erri {
+									if nimg := resize.Resize(400, 0, img, resize.InterpolationFunction(resize.Lanczos3)); nil != nimg {
+										if tf, errt := os.OpenFile(fmt.Sprintf("%s/capture_thumb%s", filepath.Dir(spath), filepath.Ext(spath)), os.O_TRUNC|os.O_CREATE|os.O_WRONLY, os.ModePerm); nil == errt {
+											if erre := jpeg.Encode(tf, nimg, &jpeg.Options{Quality: 90}); nil != erre {
+												this.logger.Warn(erre)
+											} else {
+												if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
+													if d, e := jsoniter.Marshal(model.Worker{Addr: task.Metadata.Get("addr"), Name: task.Metadata.Get("name"), Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", task.Metadata.Get("addr"), tool.Now()), Status: true}); nil == e {
+														this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_UPDATE))
+													}
 												}
 											}
+											tf.Close()
+										} else {
+											this.logger.Warn(errt)
 										}
-										tf.Close()
-									} else {
-										this.logger.Warn(errt)
 									}
+								} else {
+									this.logger.Warn(erri)
 								}
+								sf.Close()
 							} else {
-								this.logger.Warn(erri)
+								this.logger.Warn(errs)
 							}
-							sf.Close()
-						} else {
-							this.logger.Warn(errs)
-						}
-						break
-					case tool.REFRESH_SELECTED_WORKER:
-						//刷新客户机状态
-						if ips := gstr.Explode(";", string(task.Payload)); len(ips) > 0 {
-							this.connects.Iterator(func(k string, v interface{}) bool {
-								if tar := v.(*connectItem); nil != tar {
-									//构造发送截图数据(点对点派发给客户机)
-									if gstr.InArray(ips, tar.addr) {
-										this.capture(tar)
+							break
+						case tool.REFRESH_SELECTED_WORKER:
+							//刷新客户机状态
+							if ips := gstr.Explode(";", string(task.Payload)); len(ips) > 0 {
+								this.connects.Iterator(func(k string, v interface{}) bool {
+									if tar := v.(*connectItem); nil != tar {
+										//构造发送截图数据(点对点派发给客户机)
+										if gstr.InArray(ips, tar.addr) {
+											this.capture(tar)
+										}
 									}
-								}
-								return true
-							})
+									return true
+								})
+							}
 						}
+						/** 必须要确认，否会重复的,如果存在多个订阅者，必须每个订阅者都确认，否则会一直发的(watermill默认规则) */
+						task.Ack()
 					}
-					/** 必须要确认，否会重复的,如果存在多个订阅者，必须每个订阅者都确认，否则会一直发的(watermill默认规则) */
-					task.Ack()
 				case <-this.ctx.Done():
 					goto PROCESS_FOR_SLOW
 				}
@@ -269,8 +271,8 @@ func (this *App) OnShutdown(svr gnet.Server) {
 		this.close(v.(*connectItem), "服务器已关闭")
 		return true
 	})
+	this.goroutinePool.Release()
 	this.cronTask.Stop()
-	this.workerPool.Release()
 	this.chanBytePool.Close()
 	this.cmdPool.Close()
 }
@@ -347,7 +349,7 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 	}
 	//接收截图
-	this.workerPool.Submit(func() {
+	this.goroutinePool.Submit(func() {
 		//匿名函数内部使用的只是指针的拷贝，可能对象已被释放(因此需要拷贝)
 		item := conitem
 		if nil != item {

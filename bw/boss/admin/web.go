@@ -82,37 +82,38 @@ func (this *Web) Run(addr ...string) (err error) {
 		for {
 			select {
 			case msg := <-messages:
-				msg.Ack()
-				meta := msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE)
-				switch meta {
-				case tool.WORKER_ONLINE, tool.WORKER_OFFLINE:
-					//上线 离线
-					worker := model.Worker{}
-					if tool.WORKER_ONLINE == meta {
-						if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
-							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_ONLINE, Response: worker}); nil == err {
+				if nil != msg {
+					msg.Ack()
+					meta := msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE)
+					switch meta {
+					case tool.WORKER_ONLINE, tool.WORKER_OFFLINE:
+						//上线 离线
+						worker := model.Worker{}
+						if tool.WORKER_ONLINE == meta {
+							if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+								if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_ONLINE, Response: worker}); nil == err {
+									lody.Broadcast(res)
+								}
+							}
+						} else {
+							if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+								if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_OFFLINE, Response: worker}); nil == err {
+									lody.Broadcast(res)
+								}
+							}
+						}
+						break
+					case tool.WORKER_QPS:
+						//QPS
+						qps := model.Qps{}
+						if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
+							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_QPS, Response: qps}); nil == err {
 								lody.Broadcast(res)
 							}
 						}
-					} else {
-						if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
-							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_OFFLINE, Response: worker}); nil == err {
-								lody.Broadcast(res)
-							}
-						}
+						break
 					}
-					break
-				case tool.WORKER_QPS:
-					//QPS
-					qps := model.Qps{}
-					if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
-						if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_QPS, Response: qps}); nil == err {
-							lody.Broadcast(res)
-						}
-					}
-					break
 				}
-				break
 			case <-this.ctx.Done():
 				//term
 				goto EXIT_CUR
@@ -156,21 +157,22 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 				if messages, err := this.mill.Subscribe(ctxTimeout, tool.WORKER_ADMIN_CTX_RESULT); nil == err {
 					select {
 					case msg := <-messages:
-						msg.Ack()
-						switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
-						case tool.QUERY_WORKERS:
-							workers := []model.Worker{}
-							if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
-								if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS, Response: workers}); nil == err {
-									//请求需要时间
-									if !session.IsClosed() {
-										session.Write(res)
+						if nil != msg {
+							msg.Ack()
+							switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+							case tool.QUERY_WORKERS:
+								workers := []model.Worker{}
+								if nil == jsoniter.Unmarshal(msg.Payload, &workers) {
+									if res, err := jsoniter.Marshal(Ping{Query: tool.QUERY_WORKERS, Response: workers}); nil == err {
+										//请求需要时间
+										if !session.IsClosed() {
+											session.Write(res)
+										}
 									}
 								}
+								break
 							}
-							break
 						}
-
 						break
 					case <-ctxTimeout.Done():
 						break
@@ -198,19 +200,21 @@ func (this *Web) init(lody *melody.Melody) (err error) {
 							for {
 								select {
 								case msg := <-messages:
-									msg.Ack()
-									switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
-									case tool.WORKER_UPDATE:
-										worker := model.Worker{}
-										if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
-											if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_UPDATE, Response: worker}); nil == err {
-												//请求需要时间(搞不好就关闭了)
-												if !session.IsClosed() {
-													session.Write(res)
+									if nil != msg {
+										msg.Ack()
+										switch msg.Metadata.Get(tool.WORKER_ADMIN_CTX_SUB_TYPE) {
+										case tool.WORKER_UPDATE:
+											worker := model.Worker{}
+											if nil == jsoniter.Unmarshal(msg.Payload, &worker) {
+												if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_UPDATE, Response: worker}); nil == err {
+													//请求需要时间(搞不好就关闭了)
+													if !session.IsClosed() {
+														session.Write(res)
+													}
 												}
 											}
+											break
 										}
-										break
 									}
 									break
 								case <-ctxTimeout.Done():

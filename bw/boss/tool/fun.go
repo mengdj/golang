@@ -1,4 +1,4 @@
-package tool
+﻿package tool
 
 import (
 	"github.com/gogf/gf/util/grand"
@@ -34,7 +34,7 @@ func LocalAddress() (string, error) {
 	}
 GET_ADDR:
 	for _, f := range interfaces {
-		//可能多块网卡
+		//可能多块网卡。。。
 		if 0 != (f.Flags & net.FlagUp) {
 			addrs, err = f.Addrs()
 			if nil != err {

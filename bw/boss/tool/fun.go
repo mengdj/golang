@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-//尝试调用某个可能panic的函数，如果出错就捕捉，避免退出
+//尝试调用某个可能panic的函数，如果出错就捕捉，避免退出(此函数可能导致性能损失)
 func Try(f func(), e func(i interface{})) {
 	defer func() {
 		if r := recover(); nil != r {
@@ -16,22 +16,36 @@ func Try(f func(), e func(i interface{})) {
 	f()
 }
 
-func Now() int64{
+func Now() int64 {
 	return time.Now().Unix()
 }
+
 //获取本机ip地址
 func LocalAddress() (string, error) {
 	var (
-		addrs []net.Addr
-		err   error
-		ret   string = ""
+		addrs      []net.Addr
+		interfaces []net.Interface
+		err        error
+		ret        string = ""
 	)
-	addrs, err = net.InterfaceAddrs()
-	if nil == err {
-		for _, val := range addrs {
-			if ipNet, ok := val.(*net.IPNet); ok {
-				if nil != ipNet.IP.To4() {
-					ret = ipNet.IP.String()
+	interfaces, err = net.Interfaces()
+	if nil != err {
+		return ret, err
+	}
+GET_ADDR:
+	for _, f := range interfaces {
+		//可能多块网卡
+		if 0 != (f.Flags & net.FlagUp) {
+			addrs, err = f.Addrs()
+			if nil != err {
+				return ret, err
+			}
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+					if nil != ipNet.IP.To4() {
+						ret = ipNet.IP.String()
+						break GET_ADDR
+					}
 				}
 			}
 		}

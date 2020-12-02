@@ -342,7 +342,7 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	this.reactQps.Add(1)
 	//发布客户端上线消息(保证至少一个管理员上线的情况下才发布消息)
 	if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
-		if d, e := jsoniter.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: tool.Now(), Status: true}); nil == e {
+		if d, e := jsoniter.Marshal(model.Worker{Addr: remoteAddr, Name: "", Ping: tool.Now(), Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", remoteAddr, tool.Now()), Status: true}); nil == e {
 			this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_ONLINE))
 		}
 	}

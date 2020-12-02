@@ -86,12 +86,8 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				//创建锁保证TCP流顺序发送(保证各个操作之间不相互影响，不然影响服务器收包)
 				syncLock := gmutex.New()
 				cron_task.AddFunc("*/1 * * * *", func() {
-					//每3秒发送心跳协议
+					//每1秒发送心跳协议
 					this.ping(syncLock)
-				})
-				cron_task.AddFunc("*/30 * * * *", func() {
-					//默认每间隔30秒发送1张截图
-					this.capture(syncLock)
 				})
 				//读取接收到的包并发布到消息队列（读取STREAM到MESSAGE）
 				go func() {
@@ -177,6 +173,11 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 											case proc.ContentType_CLOSE:
 												this.logger.Info("服务器已中断连接(%s)", *cd.Content.GetClose().Reason)
 												connectCancelCtx()
+												break
+											case proc.ContentType_CAPTURE:
+												//服务器请求马上截图
+												this.capture(syncLock)
+												break
 											}
 										}
 									}
@@ -189,12 +190,14 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 					this.connected.Set(false)
 					wgroup.Done()
 				}()
+				//启动时自动更新一次最新信息
+				this.capture(syncLock)
 				cron_task.Start()
 				select {
 				case <-ctx.Done():
 					this.logger.Info("客户端已被用户终止(01)")
 				case <-connectCtx.Done():
-					this.logger.Info("客户端已被用户终止(02)")
+					this.logger.Info("客户端已被服务器终止(02)")
 				}
 				wgroup.Wait()
 				cron_task.Stop()
@@ -222,7 +225,7 @@ var (
 /** 心跳协议 */
 func (this *Client) ping(lock *gmutex.Mutex) {
 	if this.connected.Val() {
-		if lock.TryLock() {
+		lock.TryLockFunc(func() {
 			var (
 				hostName    string           = ""
 				contentType proc.ContentType = proc.ContentType_PING
@@ -253,8 +256,7 @@ func (this *Client) ping(lock *gmutex.Mutex) {
 					this.cmdPool.Put(ins)
 				}
 			}
-			lock.Unlock()
-		}
+		})
 	}
 }
 
@@ -269,24 +271,25 @@ func (this *Client) info(lock *gmutex.Mutex) {
 /** 捕捉屏幕截图（可能比较耗时因此加入锁） */
 func (this *Client) capture(lock *gmutex.Mutex) {
 	if this.connected.Val() {
-		if lock.TryLock() {
-			var (
-				contentType proc.ContentType = proc.ContentType_CAPTURE
-				file        *os.File
-				err         error
-			)
-			this.captId += 1
-			this.captId %= 65536
-			//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
-			if nil == this.capt.Capture() {
-				if err = this.capt.Resize(1920, 0, screenshot.Lanczos3, 90); nil != err {
-					this.logger.Warn(err)
-				}
+		var (
+			contentType proc.ContentType = proc.ContentType_CAPTURE
+			file        *os.File
+			err         error
+		)
+		//截图(裁剪图像)比较耗时，不该放到锁里，否则造成其他包无法投递，尤其是心跳包，服务器直接关掉客户端就麻烦了
+		if nil == this.capt.Capture() {
+			if err = this.capt.Resize(1920, 0, screenshot.Lanczos3, 90); nil != err {
+				this.logger.Warn(err)
+			}
+			lock.TryLockFunc(func() {
+				this.captId += 1
+				this.captId %= 65536
+				//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
 				if file, err = os.Open(this.capt.GetPath()); nil == err {
 					defer func() {
 						file.Close()
 					}()
-					//内部函数实现发送截图数据到队列
+					//内部函数实现发送截图数据到队列(尽量减少锁的时间)
 					pageSend := func(d []byte, seq uint32, more, compress bool) {
 						if ret, err := this.cmdPool.Get(); nil == err {
 							if ins, ok := ret.(*proc.Cmd); ok {
@@ -313,7 +316,6 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 							}
 						}
 					}
-					//
 					raw := make([]byte, CAPTURE_PAGE_SIZE)
 					buffReader := bufio.NewReader(file)
 					var seq uint32 = 0
@@ -334,8 +336,7 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 					}
 					pageSend([]byte{}, seq, false, false)
 				}
-			}
-			lock.Unlock()
+			})
 		}
 	}
 }

@@ -97,6 +97,7 @@ func (this *Screenshot) GetPath() string {
 	return this.file
 }
 
+//此函数带有缓存
 func (this *Screenshot) GetInfoStat() (ret *host.InfoStat, err error) {
 	return host.Info()
 }

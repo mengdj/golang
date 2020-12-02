@@ -12,19 +12,19 @@
 <link href="/static/css/materialdesignicons.min.css" rel="stylesheet">
 <link href="/static/css/style.min.css" rel="stylesheet">
 </head>
-  
+
 <body>
 <div class="lyear-layout-web">
   <div class="lyear-layout-container">
     <!--左侧导航-->
     <aside class="lyear-layout-sidebar">
-      
+
       <!-- logo -->
       <div id="logo" class="sidebar-header">
         <a href="index.html"><img src="/static/images/logo-sidebar.png" title="LightYear" alt="LightYear" /></a>
       </div>
-      <div class="lyear-layout-sidebar-scroll"> 
-        
+      <div class="lyear-layout-sidebar-scroll">
+
         <nav class="sidebar-main">
           <ul class="nav nav-drawer">
             <li class="nav-item active"> <a href="index.html"><i class="mdi mdi-home"></i> 后台首页</a> </li>
@@ -36,21 +36,21 @@
             </li>
           </ul>
         </nav>
-        
+
         <div class="sidebar-footer">
           <p class="copyright">Copyright &copy; 2020. <a target="_blank" href="https://github.com/mengdj">mengdj</a> All rights reserved.</p>
         </div>
       </div>
-      
+
     </aside>
     <!--End 左侧导航-->
-    
+
     <!--头部信息-->
     <header class="lyear-layout-header">
-      
+
       <nav class="navbar navbar-default">
         <div class="topbar">
-          
+
           <div class="topbar-left">
             <div class="lyear-aside-toggler">
               <span class="lyear-toggler-bar"></span>
@@ -59,7 +59,7 @@
             </div>
             <span class="navbar-page-title"> 管理后台 </span>
           </div>
-          
+
           <ul class="topbar-right">
             <li class="dropdown dropdown-profile">
               <a href="javascript:void(0)" data-toggle="dropdown">
@@ -128,29 +128,29 @@
 				<li class="drop-skin-li clearfix">
                   <span class="inverse">
                     <input type="radio" name="header_bg" value="default" id="header_bg_1" checked>
-                    <label for="header_bg_1"></label>                      
-                  </span>                                                    
-                  <span>                                                     
+                    <label for="header_bg_1"></label>
+                  </span>
+                  <span>
                     <input type="radio" name="header_bg" value="color_2" id="header_bg_2">
-                    <label for="header_bg_2"></label>                      
-                  </span>                                                    
-                  <span>                                                     
+                    <label for="header_bg_2"></label>
+                  </span>
+                  <span>
                     <input type="radio" name="header_bg" value="color_3" id="header_bg_3">
                     <label for="header_bg_3"></label>
                   </span>
                   <span>
                     <input type="radio" name="header_bg" value="color_4" id="header_bg_4">
-                    <label for="header_bg_4"></label>                      
-                  </span>                                                    
-                  <span>                                                     
+                    <label for="header_bg_4"></label>
+                  </span>
+                  <span>
                     <input type="radio" name="header_bg" value="color_5" id="header_bg_5">
-                    <label for="header_bg_5"></label>                      
-                  </span>                                                    
-                  <span>                                                     
+                    <label for="header_bg_5"></label>
+                  </span>
+                  <span>
                     <input type="radio" name="header_bg" value="color_6" id="header_bg_6">
-                    <label for="header_bg_6"></label>                      
-                  </span>                                                    
-                  <span>                                                     
+                    <label for="header_bg_6"></label>
+                  </span>
+                  <span>
                     <input type="radio" name="header_bg" value="color_7" id="header_bg_7">
                     <label for="header_bg_7"></label>
                   </span>
@@ -198,13 +198,13 @@
 			</li>
             <!--切换主题配色-->
           </ul>
-          
+
         </div>
       </nav>
-      
+
     </header>
     <!--End 头部信息-->
-    
+
     <!--页面主要内容-->
     <main class="lyear-layout-content">
       <div class="container-fluid">
@@ -267,6 +267,7 @@
 <script type="text/javascript" src="/static/js/bootstrap.min.js"></script>
 <script type="text/javascript" src="/static/js/perfect-scrollbar.min.js"></script>
 <script type="text/javascript" src="/static/js/main.min.js"></script>
+<script type="text/javascript" src="/static/js/bootstrap-notify.min.js"></script>
 
 <style type="text/css">
   a.thumbnail{border:1px solid #eee;}
@@ -292,8 +293,6 @@ function refresh(){
   //发送指令获取最新的信息
   if(ws){
     ws.send("REFRESH_SELECTED_WORKER:"+selected_elements.join(";"));
-    //debug
-    console.log("REFRESH_SELECTED_WORKER:"+selected_elements.join(";"));
   }
 }
 
@@ -359,6 +358,7 @@ function wsocket(server){
         $("div.work-list").append('<div class="col-xs-6 col-md-3 work-item" select="0" status="1" val="'+data.response.address+'" id="worker-'+filterLine(data.response.address)+'"><a href="javascript:void(0)" class="thumbnail"><img src="/data/'+data.response.address+'/capture.jpg" alt=""></a></div>');
       }
       online_worker_num.text(parseInt(online_worker_num.text())+1);
+      $.notify({icon: 'glyphicon glyphicon-star',title:"上线提醒",message:"客户"+data.response.address+"上线了"});
     }else if("WORKER_OFFLINE"==data.query){
       //客户下线
       var ele=$("div.work-list").find("div#worker-"+filterLine(data.response.address)+">a");
@@ -367,6 +367,7 @@ function wsocket(server){
        ele.attr("status",0);
       }
       online_worker_num.text(parseInt(online_worker_num.text())-1);
+      $.notify({icon: 'glyphicon glyphicon-star',title:"下线提醒",message:"客户"+data.response.address+"下线了"});
     }else if("WORKER_QPS"==data.query){
       //更新QPS信息
       $("#qps_num_for_second").text(data.response.count);

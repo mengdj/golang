@@ -112,6 +112,15 @@ func (this *Web) Run(addr ...string) (err error) {
 							}
 						}
 						break
+					case tool.WORKER_BPS:
+						//BPS
+						qps := model.Bps{}
+						if nil == jsoniter.Unmarshal(msg.Payload, &qps) {
+							if res, err := jsoniter.Marshal(Ping{Query: tool.WORKER_BPS, Response: qps}); nil == err {
+								lody.Broadcast(res)
+							}
+						}
+						break
 					}
 				}
 			case <-this.ctx.Done():

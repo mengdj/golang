@@ -15,6 +15,7 @@ import (
 	"github.com/gogf/gf/container/gpool"
 	"github.com/gogf/gf/container/gtype"
 	"github.com/gogf/gf/text/gstr"
+	"github.com/gogf/gf/util/gconv"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
 	jsoniter "github.com/json-iterator/go"
@@ -88,6 +89,8 @@ type App struct {
 	mill *ext.ExtGoChanel
 	//socket请求计数
 	reactQps *gtype.Uint64
+	//socket传输字节数
+	reactBps *gtype.Uint64
 	//上下文对象，处理取消或用户终止事件，针对协程
 	ctx context.Context
 }
@@ -108,6 +111,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	this.web = admin.NewWeb(this.ctx, this.logger, this.mill, this.goroutinePool)
 	this.cronTask = cron.New()
 	this.reactQps = gtype.NewUint64(0)
+	this.reactBps = gtype.NewUint64(0)
 	//协议池
 	this.cmdPool = gpool.New(0, func() (interface{}, error) {
 		ret := new(proc.Cmd)
@@ -169,11 +173,16 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 	})
 	//派发请求QPS
 	this.cronTask.AddFunc("*/1 * * * * *", func() {
-		ov := this.reactQps.Set(0)
 		if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
+			ov := this.reactQps.Set(0)
 			//发送QPS到消息队列
 			if d, e := jsoniter.Marshal(model.Qps{Count: ov}); nil == e {
 				this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_QPS))
+			}
+			//发送BPS到消息队列
+			ov = this.reactBps.Set(0)
+			if d, e := jsoniter.Marshal(model.Bps{Count: ov}); nil == e {
+				this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_BPS))
 			}
 		}
 	})
@@ -236,6 +245,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 				}
 			}
 		PROCESS_FOR_SLOW:
+			this.logger.Info("PROCESS_FOR_SLOW完成")
 		} else {
 			this.logger.Error(err)
 		}
@@ -281,6 +291,8 @@ func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Actio
 	if action != gnet.Close && action != gnet.Shutdown {
 		//+1
 		this.reactQps.Add(1)
+		//+bytes
+		this.reactBps.Add(gconv.Uint64(len(frame)))
 		if len(frame) > 0 {
 			remoteAddr := strings.Split(c.RemoteAddr().String(), ":")[0]
 			//read
@@ -413,6 +425,7 @@ func (this *App) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 					}, func(i interface{}) {
 						this.logger.Info(i)
 					})
+					this.logger.Info("RECIVER CAPTURE完成")
 				}
 			}
 		}
@@ -450,6 +463,10 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	return
 }
 
+//广播
+func (this *App) broadcast(tar *connectItem, text string) {
+}
+
 //PING确认(对于客户端的心跳请求进行回应)
 func (this *App) capture(tar *connectItem) error {
 	cmd, err := this.cmdPool.Get()
@@ -471,6 +488,7 @@ func (this *App) capture(tar *connectItem) error {
 	//给客户端发送直接丢空包即可
 	msg.Content.Param = &proc.Content_Capture{&proc.Capture{}}
 	if buf, errz := proto.Marshal(msg); nil == errz {
+		this.reactBps.Add(gconv.Uint64(len(buf)))
 		if errz = tar.conn.AsyncWrite(buf); nil != errz {
 			this.logger.Warn(errz)
 		}
@@ -503,6 +521,7 @@ func (this *App) ping(tar *connectItem) error {
 	hostName, _ := os.Hostname()
 	msg.Content.Param = &proc.Content_Ping{&proc.Ping{Name: &hostName, Time: &nowUnix}}
 	if buf, errz := proto.Marshal(msg); nil == errz {
+		this.reactBps.Add(gconv.Uint64(len(buf)))
 		if errz = tar.conn.AsyncWrite(buf); nil != errz {
 			this.logger.Warn(errz)
 		}
@@ -545,6 +564,7 @@ func (this *App) close(tar *connectItem, reason string) error {
 	msg.Content.Source = &packetSource
 	msg.Content.Param = &proc.Content_Close{&proc.Close{Reason: &reason}}
 	if buf, errz := proto.Marshal(msg); nil == errz {
+		this.reactBps.Add(gconv.Uint64(len(buf)))
 		//内部自动调用编码器编码数据
 		if errz = tar.conn.AsyncWrite(buf); nil != errz {
 			this.logger.Warn(errz)

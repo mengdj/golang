@@ -17,8 +17,11 @@ import (
 )
 
 const (
+	//组播端口
 	BROADCAST_PORT        = 10000
+	//tcp服务端口
 	BROADCAST_LISTEN_PORT = 10001
+	//web管理端口
 	WEB_LISTEN_PORT       = 10002
 )
 

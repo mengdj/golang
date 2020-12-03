@@ -15,6 +15,7 @@ const (
 	WORKER_ADMIN_CTX_SUB_TYPE = "type"
 	WORKER_UPDATE             = "WORKER_UPDATE"
 	WORKER_QPS                = "WORKER_QPS"
+	WORKER_BPS                = "WORKER_BPS"
 	WORKER_ONLINE             = "WORKER_ONLINE"
 	WORKER_OFFLINE            = "WORKER_OFFLINE"
 

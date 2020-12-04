@@ -8,7 +8,6 @@ require (
 	ext v0.0.0
 	github.com/ThreeDotsLabs/watermill v1.1.1
 	github.com/alecthomas/log4go v0.0.0-20180109082532-d146e6b86faa
-	github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/panjf2000/ants/v2 v2.4.3
 	github.com/pkg/errors v0.9.1 // indirect

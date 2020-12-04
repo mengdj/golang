@@ -8,6 +8,4 @@ require (
 	tool v0.0.0
 )
 
-replace (
-	tool v0.0.0 => ../tool
-)
+replace tool v0.0.0 => ../tool

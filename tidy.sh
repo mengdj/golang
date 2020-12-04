@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
+###########################################################
 #Author:mengdj@outlook.com
 #Created Time:2020.12.04 11:56
 #Description:execute go mod tidy in current directory
+#Version:0.0.1
+###########################################################
 
-function search() {
+CURRENT_DIR=$(pwd)
+SEARCH_DIR=$CURRENT_DIR
+SEARCH_TOTAL=0
+
+function GoTidy() {
 	for file in $(ls $1); do
-		if test -d $1"/"$file; then
-			if test -f $1"/"$file"/go.mod"; then
-				echo "process "$1"/"$file
-				cd $1"/"$file
+		local target=$1"/"$file
+		if test -d $target; then
+			if test -f $target"/go.mod"; then
+				echo "process "$target
+				let "SEARCH_TOTAL+=1"
+				cd $target
 				go mod tidy
 			fi
-			search $1"/"$file
+			GoTidy $target
 		fi
 	done
 }
 
-CURRENT_DIR=$(pwd)
-SEARCH_DIR=$CURRENT_DIR
 if test $# -ne 0; then
 	if test -d $1; then
 		cd $1
@@ -27,6 +34,6 @@ if test $# -ne 0; then
 		exit
 	fi
 fi
-echo "start in "$SEARCH_DIR
-search $SEARCH_DIR
+GoTidy $SEARCH_DIR
+echo "processed("$SEARCH_TOTAL")."
 cd $CURRENT_DIR

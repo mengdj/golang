@@ -48,6 +48,7 @@ type Client struct {
 	captId uint32
 	//消息
 	pubSub    *ext.ExtGoChanel
+	//是否连接
 	connected *gtype.Bool
 }
 

@@ -3,25 +3,22 @@ package ext
 import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/gogf/gf/container/gpool"
 )
 
-var globalMessagePool *gpool.Pool=nil
+type Meta = string
 
-type ExtMessage struct{
-	*message.Message
+func NewMessage(payload message.Payload, meta ...Meta) *message.Message {
+	msg := message.NewMessage(watermill.NewUUID(), payload)
+	//组合元数据(请成对传递)
+	if size := len(meta); size > 0 && 0 == size%2 {
+		key := ""
+		for i, v := range meta {
+			if 0 == i%2 {
+				key = v
+			} else {
+				msg.Metadata.Set(key, v)
+			}
+		}
+	}
+	return msg
 }
-
-func (this *ExtMessage) Ack() bool{
-	return this.Message.Ack()
-}
-
-func init() {
-	//初始化对象池
-	globalMessagePool=gpool.New(0, func() (interface{}, error) {
-		return message.NewMessage(watermill.NewUUID(),[]byte{}),nil
-	}, func(i interface{}) {
-	})
-}
-
-

@@ -3,14 +3,14 @@
 #Author:mengdj@outlook.com
 #Created Time:2020.12.04 11:56
 #Description:execute go mod tidy in current directory
-#Version:0.0.4
+#Version:0.0.5
 #File:tidy.sh
 ###########################################################
 
 CURRENT_DIR=$(pwd)
 SEARCH_DIR=$CURRENT_DIR
 SEARCH_TOTAL=0
-EXECUTE_CMD="go mod tidy"
+EXECUTE_CMD="$GOROOT/bin/go mod tidy"
 EXECUTE_TIMESTAMP=`date +%s`
 EXECUTE_FIFO="$$.fifo"
 EXECUTE_MAX_PROCESS=4

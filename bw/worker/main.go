@@ -88,6 +88,6 @@ func main() {
 	}()
 	//获取中断事件
 	<-sign
-	pubSub.Close()
 	cancel_ctx()
+	pubSub.Close()
 }

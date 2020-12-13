@@ -7,6 +7,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/alecthomas/log4go"
+	"github.com/gogf/gf/container/gtype"
 	"net"
 )
 
@@ -17,12 +18,12 @@ const (
 )
 
 type Broadcast struct {
-	running bool
+	running *gtype.Bool
 	logger  *log4go.Logger
 }
 
 func NewBroadcast(logger *log4go.Logger) *Broadcast {
-	return &Broadcast{running: false, logger: logger}
+	return &Broadcast{running: gtype.NewBool(false), logger: logger}
 }
 
 func (this *Broadcast) Start(ctx context.Context, listenPort uint32, pub *ext.ExtGoChanel) error {
@@ -36,7 +37,7 @@ func (this *Broadcast) Start(ctx context.Context, listenPort uint32, pub *ext.Ex
 			conn.Close()
 		}
 	}()
-	if !this.running {
+	if !this.running.Val() {
 		addr, err = net.ResolveUDPAddr(UDP, fmt.Sprintf("0.0.0.0:%d", listenPort))
 		if nil != err {
 			this.logger.Error(err)
@@ -46,26 +47,28 @@ func (this *Broadcast) Start(ctx context.Context, listenPort uint32, pub *ext.Ex
 			this.logger.Error(err)
 		}
 		this.logger.Info("接收广播:%d", listenPort)
-		this.running = true
 		go func() {
-			for {
-				var buffer [512]byte
-				retCount, _, retErr := conn.ReadFromUDP(buffer[0:])
-				if nil == retErr &&retCount > 0 {
-					if !pub.IsPause("START_CONNECT_SERVER") {
+			this.running.Set(true)
+			for this.running.Val() {
+				if !pub.IsPause("START_CONNECT_SERVER") {
+					var buffer [512]byte
+					retCount, _, retErr := conn.ReadFromUDP(buffer[0:])
+					if nil == retErr && retCount > 0 {
 						msg := message.NewMessage(watermill.NewUUID(), buffer[:retCount])
 						if err := pub.Publish("START_CONNECT_SERVER", msg); err != nil {
 							this.logger.Warn(err)
 						}
+					} else {
+						break
 					}
-				}else{
-					this.logger.Critical(retErr)
 				}
 			}
+			//
+			this.logger.Info("停止广播接收")
 		}()
 		//wait
 		<-ctx.Done()
-		this.running = false
+		this.running.Set(false)
 	}
 	return err
 }

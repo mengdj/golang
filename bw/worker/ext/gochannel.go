@@ -2,6 +2,7 @@ package ext
 
 import (
 	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/gogf/gf/container/gset"
 )
@@ -14,6 +15,10 @@ type ExtGoChanel struct {
 func NewExtGoChannel(config gochannel.Config, logger watermill.LoggerAdapter) *ExtGoChanel {
 	t := &ExtGoChanel{gochannel.NewGoChannel(config, logger), gset.NewStrSet()}
 	return t
+}
+
+func (this *ExtGoChanel) Publish(topic string, messages ...*message.Message) error{
+	return this.GoChannel.Publish(topic,messages...)
 }
 
 func (this *ExtGoChanel) Pause(topics ...string) {

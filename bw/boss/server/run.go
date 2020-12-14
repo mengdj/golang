@@ -14,6 +14,7 @@ import (
 	"github.com/gogf/gf/container/gmap"
 	"github.com/gogf/gf/container/gpool"
 	"github.com/gogf/gf/container/gtype"
+	"github.com/gogf/gf/os/gcache"
 	"github.com/gogf/gf/text/gstr"
 	"github.com/gogf/gf/util/gconv"
 	"github.com/golang/protobuf/proto"
@@ -34,9 +35,10 @@ import (
 )
 
 const (
-	TCP                       = "tcp"
-	PACKET_SOURCE proc.Source = proc.Source_SERVER
-	PACKET_TAG    string      = "CMD"
+	TCP                                    = "tcp"
+	PACKET_SOURCE              proc.Source = proc.Source_SERVER
+	PACKET_TAG                 string      = "CMD"
+	CACHE_CAPTURE_PACKET_BYTES             = "CACHE_CAPTURE_PACKET_BYTES"
 )
 
 type None = struct{}
@@ -93,10 +95,12 @@ type App struct {
 	reactBps *gtype.Uint64
 	//上下文对象，处理取消或用户终止事件，针对协程
 	ctx context.Context
+	//cache
+	cache *gcache.Cache
 }
 
 func NewApp(c context.Context, ps *ext.ExtGoChanel, logger *log4go.Logger, p model.Port) *App {
-	return &App{ctx: c, logger: logger, connects: gmap.NewStrAnyMap(true), port: p, mill: ps}
+	return &App{ctx: c, logger: logger, connects: gmap.NewStrAnyMap(true), port: p, mill: ps, cache: gcache.New()}
 }
 
 /** 使用自定义解码器解码 */
@@ -467,35 +471,48 @@ func (this *App) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 func (this *App) broadcast(tar *connectItem, text string) {
 }
 
-//PING确认(对于客户端的心跳请求进行回应)
+//数据捕获请求(cache请求)
 func (this *App) capture(tar *connectItem) error {
-	cmd, err := this.cmdPool.Get()
-	defer func() {
-		this.cmdPool.Put(cmd)
-	}()
-	if nil != err {
-		return err
-	}
-	msg := cmd.(*proc.Cmd)
-	var (
-		contentType  proc.ContentType = proc.ContentType_CAPTURE
-		packetSource proc.Source      = PACKET_SOURCE
-		packetTag    string           = PACKET_TAG
-	)
-	msg.Head.Cmd = &packetTag
-	msg.Content.Type = &contentType
-	msg.Content.Source = &packetSource
-	//给客户端发送直接丢空包即可
-	msg.Content.Param = &proc.Content_Capture{&proc.Capture{}}
-	if buf, errz := proto.Marshal(msg); nil == errz {
-		this.reactBps.Add(gconv.Uint64(len(buf)))
-		if errz = tar.conn.AsyncWrite(buf); nil != errz {
-			this.logger.Warn(errz)
+	//原始包缓存到内存即可
+	content, _ := this.cache.Get(CACHE_CAPTURE_PACKET_BYTES)
+	if nil == content {
+		cmd, err := this.cmdPool.Get()
+		defer func() {
+			_ = this.cmdPool.Put(cmd)
+		}()
+		if nil != err {
+			return err
 		}
-	} else {
-		this.logger.Warn(errz)
+		msg := cmd.(*proc.Cmd)
+		var (
+			contentType  proc.ContentType = proc.ContentType_CAPTURE
+			packetSource proc.Source      = PACKET_SOURCE
+			packetTag    string           = PACKET_TAG
+		)
+		msg.Head.Cmd = &packetTag
+		msg.Content.Type = &contentType
+		msg.Content.Source = &packetSource
+		//给客户端发送直接丢空包即可
+		msg.Content.Param = &proc.Content_Capture{&proc.Capture{}}
+		if buf, errt := proto.Marshal(msg); nil == errt {
+			if errt = this.cache.Set(CACHE_CAPTURE_PACKET_BYTES, buf, 0); nil != errt {
+				_ = this.logger.Warn(errt)
+			}
+			//align
+			content = buf
+		} else {
+			return errt
+		}
 	}
-	return err
+	//assert
+	if bytesContent, ok := content.([]byte); ok {
+		if errw := tar.conn.AsyncWrite(bytesContent); nil == errw {
+			this.reactBps.Add(gconv.Uint64(len(bytesContent)))
+		} else {
+			return errw
+		}
+	}
+	return nil
 }
 
 //PING确认(对于客户端的心跳请求进行回应)

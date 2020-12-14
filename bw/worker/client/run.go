@@ -68,7 +68,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 		tcpErr    error
 		wgroup    sync.WaitGroup
 	)
-	cron_task := cron.New()
+	cronTask := cron.New()
 	this.connected = gtype.NewBool(false)
 	remotAddr, tcpErr = net.ResolveTCPAddr(TCP, fmt.Sprintf("%s:%d", *ret.Body.Server, *ret.Body.Port))
 	if nil == tcpErr {
@@ -86,7 +86,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 			if nil == writeStatus && nil == readStatus {
 				//创建锁保证TCP流顺序发送(保证各个操作之间不相互影响，不然影响服务器收包)
 				syncLock := gmutex.New()
-				cron_task.AddFunc("*/1 * * * *", func() {
+				cronTask.AddFunc("*/1 * * * *", func() {
 					//每1秒发送心跳协议
 					this.ping(syncLock)
 				})
@@ -195,7 +195,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 				}()
 				//启动时自动更新一次最新信息
 				this.capture(syncLock)
-				cron_task.Start()
+				cronTask.Start()
 				select {
 				case <-ctx.Done():
 					this.logger.Info("客户端已被用户终止(01)")
@@ -203,7 +203,7 @@ func (this *Client) Start(ctx context.Context, ret *proc.Broadcast) error {
 					this.logger.Info("客户端已被服务器终止(02)")
 				}
 				wgroup.Wait()
-				cron_task.Stop()
+				cronTask.Stop()
 				return errors.New("客户端关闭,将自动重连,请耐心等候...")
 			} else {
 				this.logger.Fine(writeStatus)

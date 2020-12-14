@@ -289,6 +289,7 @@ func (this *App) OnShutdown(svr gnet.Server) {
 	this.cronTask.Stop()
 	this.chanBytePool.Close()
 	this.cmdPool.Close()
+	this.cache.Close()
 }
 
 func (this *App) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {

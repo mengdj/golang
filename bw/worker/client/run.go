@@ -15,6 +15,7 @@ import (
 	"github.com/gogf/gf/os/gmutex"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/reactivex/rxgo/v2"
 	"github.com/robfig/cron"
 	"io"
 	"net"
@@ -47,7 +48,7 @@ type Client struct {
 	//截图id
 	captId uint32
 	//消息
-	pubSub    *ext.ExtGoChanel
+	pubSub *ext.ExtGoChanel
 	//是否连接
 	connected *gtype.Bool
 }
@@ -279,67 +280,85 @@ func (this *Client) capture(lock *gmutex.Mutex) {
 			file        *os.File
 			err         error
 		)
-		//截图(裁剪图像)比较耗时，不该放到锁里，否则造成其他包无法投递，尤其是心跳包，服务器直接关掉客户端就麻烦了
-		if nil == this.capt.Capture() {
-			if err = this.capt.Resize(1920, 0, screenshot.Lanczos3, 90); nil != err {
-				this.logger.Warn(err)
+		//flow
+		observable := rxgo.Just(this.capt)()
+		observable.Filter(func(i interface{}) bool {
+			if ss, ok := i.(*screenshot.Screenshot); ok {
+				//capture
+				if nil == ss.Capture() {
+					return true
+				}
 			}
-			lock.TryLockFunc(func() {
-				this.captId += 1
-				this.captId %= 65536
-				//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
-				if file, err = os.Open(this.capt.GetPath()); nil == err {
-					defer func() {
-						file.Close()
-					}()
-					//内部函数实现发送截图数据到队列(尽量减少锁的时间)
-					pageSend := func(d []byte, seq uint32, more, compress bool) {
-						if ret, err := this.cmdPool.Get(); nil == err {
-							if ins, ok := ret.(*proc.Cmd); ok {
-								contentCapture := &proc.Content_Capture{}
-								contentCapture.Capture = &proc.Capture{}
-								contentCapture.Capture.Compress = &compress
-								contentCapture.Capture.More = &more
-								contentCapture.Capture.Id = &this.captId
-								contentCapture.Capture.Data = d
-								contentCapture.Capture.Seq = &seq
-								contentCapture.Capture.Compress = &compress
-								ins.Content.Source = &source
-								ins.Content.Type = &contentType
-								ins.Content.Param = contentCapture
-								ins.Head.Cmd = &cmd
-								if data, errx := proto.Marshal(ins); nil == errx {
-									if errx = this.pubSub.Publish(SEND_PACKET, message.NewMessage(watermill.NewUUID(), data)); nil != errx {
-										this.logger.Warn(errx)
+			return false
+		}).Filter(func(i interface{}) bool {
+			if ss, ok := i.(*screenshot.Screenshot); ok {
+				//capture
+				if nil == ss.Resize(1920, 0, screenshot.Lanczos3, 90) {
+					return true
+				}
+			}
+			return false
+		}).DoOnNext(func(i interface{}) {
+			if ss, ok := i.(*screenshot.Screenshot); ok {
+				//截图(裁剪图像)比较耗时，不该放到锁里，否则造成其他包无法投递，尤其是心跳包，服务器直接关掉客户端就麻烦了
+				lock.TryLockFunc(func() {
+					this.captId += 1
+					this.captId %= 65536
+					//屏幕截图数据太大，需要多次发送 CAPTURE_PAGE_SIZE
+					if file, err = os.Open(ss.GetPath()); nil == err {
+						defer func() {
+							file.Close()
+						}()
+						//内部函数实现发送截图数据到队列(尽量减少锁的时间)
+						pageSend := func(d []byte, seq uint32, more, compress bool) {
+							if ret, err := this.cmdPool.Get(); nil == err {
+								if ins, ok := ret.(*proc.Cmd); ok {
+									contentCapture := &proc.Content_Capture{}
+									contentCapture.Capture = &proc.Capture{}
+									contentCapture.Capture.Compress = &compress
+									contentCapture.Capture.More = &more
+									contentCapture.Capture.Id = &this.captId
+									contentCapture.Capture.Data = d
+									contentCapture.Capture.Seq = &seq
+									contentCapture.Capture.Compress = &compress
+									ins.Content.Source = &source
+									ins.Content.Type = &contentType
+									ins.Content.Param = contentCapture
+									ins.Head.Cmd = &cmd
+									if data, errx := proto.Marshal(ins); nil == errx {
+										if errx = this.pubSub.Publish(SEND_PACKET, message.NewMessage(watermill.NewUUID(), data)); nil != errx {
+											this.logger.Warn(errx)
+										}
+									} else {
+										this.logger.Error(errx)
 									}
-								} else {
-									this.logger.Error(errx)
+									this.cmdPool.Put(ret)
 								}
-								this.cmdPool.Put(ret)
 							}
 						}
-					}
-					raw := make([]byte, CAPTURE_PAGE_SIZE)
-					buffReader := bufio.NewReader(file)
-					var seq uint32 = 0
-					pageSend([]byte{}, seq, false, false)
-					//空包0+内容+最后一个包（空包）
-					seq++
-					for {
-						read, err := buffReader.Read(raw)
-						if err == io.EOF || read < 0 {
-							break
-						}
-						if tmp := snappy.Encode(nil, raw); len(tmp) > 0 {
-							pageSend(tmp, seq, true, true)
-						} else {
-							pageSend(raw[:read], seq, true, false)
-						}
+						raw := make([]byte, CAPTURE_PAGE_SIZE)
+						buffReader := bufio.NewReader(file)
+						var seq uint32 = 0
+						pageSend([]byte{}, seq, false, false)
+						//空包0+内容+最后一个包（空包）
 						seq++
+						for {
+							read, err := buffReader.Read(raw)
+							if err == io.EOF || read < 0 {
+								break
+							}
+							tmp := snappy.Encode(nil, raw)
+							if len(tmp) > 0 {
+								pageSend(tmp, seq, true, true)
+							} else {
+								pageSend(raw[:read], seq, true, false)
+							}
+							seq++
+						}
+						pageSend([]byte{}, seq, false, false)
 					}
-					pageSend([]byte{}, seq, false, false)
-				}
-			})
-		}
+				})
+			}
+		})
 	}
 }

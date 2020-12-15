@@ -12,3 +12,4 @@ func TestCapture(t *testing.T) {
 		log.Println(shot.Resize(1920, 0, screenshot.Lanczos3, 90))
 	}
 }
+

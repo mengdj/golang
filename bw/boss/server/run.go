@@ -209,6 +209,7 @@ func (this *App) OnInitComplete(srv gnet.Server) (action gnet.Action) {
 												this.logger.Warn(erre)
 											} else {
 												if !this.mill.IsPause(tool.WORKER_ADMIN_CTX) {
+													//广播更新
 													if d, e := jsoniter.Marshal(model.Worker{Addr: task.Metadata.Get("addr"), Name: task.Metadata.Get("name"), Thumb: fmt.Sprintf("/data/%s/capture_thumb.jpg?t=%d", task.Metadata.Get("addr"), tool.Now()), Status: true}); nil == e {
 														this.mill.Publish(tool.WORKER_ADMIN_CTX_RESULT, ext.NewAdminSubTypeMessage(d, tool.WORKER_UPDATE))
 													}
@@ -551,7 +552,6 @@ func (this *App) ping(tar *connectItem) error {
 
 //关闭客户端连接(仅提醒)
 func (this *App) close(tar *connectItem, reason string) error {
-	this.logger.Debug("关闭客户端:%s(%s)", tar.name, reason)
 	//告知客户端关闭原因后在关闭此客户端连接
 	cmd, err := this.cmdPool.Get()
 	defer func() {

@@ -10,6 +10,7 @@ require (
 	github.com/gogf/gf v1.14.5
 	github.com/golang/protobuf v1.4.3
 	github.com/golang/snappy v0.0.2
+	github.com/reactivex/rxgo/v2 v2.4.0
 	github.com/robfig/cron v1.2.0
 	proc v0.0.0
 	screenshot v0.0.0

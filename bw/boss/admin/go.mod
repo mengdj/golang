@@ -7,7 +7,7 @@ require (
 	github.com/ThreeDotsLabs/watermill v1.1.1
 	github.com/alecthomas/log4go v0.0.0-20180109082532-d146e6b86faa
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
-	github.com/gin-gonic/gin v1.6.3
+	github.com/gin-gonic/gin v1.7.7
 	github.com/go-session/gin-session v3.1.0+incompatible
 	github.com/go-session/session v3.1.2+incompatible // indirect
 	github.com/gogf/gf v1.14.5
